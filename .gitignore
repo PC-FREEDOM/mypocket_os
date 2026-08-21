@@ -1,0 +1,24 @@
+# live-build 作業生成物
+/auto/config.orig
+/binary
+/binary.*
+/build.log
+/cache
+/chroot
+/local
+/.build
+/*.iso
+/*.iso.zsync
+/*.contents
+/*.files
+/*.packages
+/*.buildlog
+/*.build
+/config/binary
+/config/bootstrap
+/config/chroot
+/config/common
+/config/source
+
+# lb config が自動生成する live 用パッケージリスト (auto/config 実行のたびに再生成される)
+/config/package-lists/live.list.chroot

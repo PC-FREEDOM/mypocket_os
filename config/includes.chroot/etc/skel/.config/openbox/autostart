@@ -1,0 +1,10 @@
+#!/bin/sh
+#
+# MyPocketOS - Openbox セッションの常駐プログラム (最小構成)
+#
+
+tint2 &
+nm-applet &
+lxpolkit &
+fcitx5 &
+spice-vdagent &
