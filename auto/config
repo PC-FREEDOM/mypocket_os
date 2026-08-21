@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+# MyPocketOS - live-build configuration
+# 参照: lb_config(1)
+
+lb config noauto \
+    --mode debian \
+    --architecture amd64 \
+    --distribution trixie \
+    --archive-areas "main contrib non-free-firmware" \
+    --binary-images iso-hybrid \
+    --bootappend-live "boot=live components locales=ja_JP.UTF-8 keyboard-layouts=jp timezone=Asia/Tokyo hostname=mypocketos" \
+    "${@}"

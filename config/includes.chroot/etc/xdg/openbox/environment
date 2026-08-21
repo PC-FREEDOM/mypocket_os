@@ -1,0 +1,9 @@
+#
+# MyPocketOS - Openbox セッション全体の環境変数
+# Fcitx5 を入力メソッドとして GTK/Qt アプリに伝える。
+# (Fcitx5でも入力メソッド名は fcitx)
+#
+
+export XMODIFIERS=@im=fcitx
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
