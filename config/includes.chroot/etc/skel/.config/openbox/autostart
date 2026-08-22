@@ -9,3 +9,7 @@ lxpolkit &
 fcitx5 &
 spice-vdagent &
 (sleep 2 && pasystray) &
+
+# -p: 起動直後の競合を避けるため数秒待ってから開始 (man conky(1) -p/--pause)
+# -U: 既にconkyが起動していれば多重起動しない (man conky(1) -U/--unique)
+conky -p 3 -U &

@@ -57,3 +57,6 @@ zram-tools
 
 # ---- アプリメニュー (jgmenu) ----
 jgmenu
+
+# ---- システム情報表示 (Conky) ----
+conky-std
