@@ -1,0 +1,227 @@
+#!/bin/sh
+#
+# mypocketos-power - MyPocketOS 電源・セッション操作の共通スクリプト
+#
+# 引数:
+#   logout    - ログアウト (openbox --exit)
+#   reboot    - 再起動 (systemctl reboot)
+#   poweroff  - 電源オフ (systemctl poweroff)
+#   firmware  - ファームウェア設定画面へ再起動 (systemctl reboot --firmware-setup)
+#   (なし)    - GUIの電源メニューを表示し、上記から選択する
+#
+# 設計方針:
+# - POSIX sh (dash) で動作する。eval は使用しない。sudo は使用しない。
+# - ログアウトは Openbox 自身のセッション終了機能 (openbox --exit) を
+#   呼び出す。systemd-logind・PolicyKit は関与しない。
+# - 再起動・電源オフ・ファームウェア設定への再起動は systemd-logind
+#   (systemctl reboot / systemctl poweroff / systemctl reboot --firmware-setup)
+#   に委ねる。これらの操作は PolicyKit の認可判断を経由する。Debian trixie の
+#   /usr/share/polkit-1/actions/org.freedesktop.login1.policy では
+#   org.freedesktop.login1.reboot / power-off / set-reboot-to-firmware-setup は
+#   いずれも allow_active=yes であり、lxpolkit が認証エージェントとして
+#   起動していれば、アクティブなセッションのユーザーはパスワード無しで
+#   実行できる (man org.freedesktop.login1 参照)。
+# - 確認ダイアログは yad を使用する。yad の終了コードは
+#   0=OK, 1=Cancel, 70=timeout, 252=Escape/ウィンドウを閉じた (man yad(1)
+#   EXIT STATUS)。本スクリプトは 0 以外をすべて「キャンセル」として扱う。
+# - openbox --exit / systemctl reboot / systemctl poweroff /
+#   systemctl reboot --firmware-setup が 0 以外で終了した場合は、
+#   yad で日本語のエラーメッセージを表示する。成功時の動作は変更しない。
+#
+# ファームウェア設定への再起動対応判定について:
+# - /sys/firmware/efi の有無は「UEFIで起動しているか」の参考情報に過ぎず、
+#   「ファームウェア設定画面への再起動に対応しているか」を断定する材料には
+#   使わない。
+# - 実際の対応可否は systemd-logind の
+#   org.freedesktop.login1.Manager.CanRebootToFirmwareSetup() を busctl 経由で
+#   問い合わせて判定する。戻り値は na/yes/no/challenge のいずれかで、
+#   na はハードウェア・ファームウェアが非対応、no は権限なし、challenge は
+#   追加認証が必要であることを示す (man org.freedesktop.login1 参照)。
+# - 本スクリプトは戻り値が厳密に "yes" の場合のみ再起動を実行する。
+#   na/no/challenge、busctlの実行失敗、想定外の出力を含め、それ以外は
+#   すべて「非対応・判定不能」として再起動を行わない (安全側に倒す)。
+# - 限界: busctl が利用できない環境や、systemd-logind が動作していない
+#   環境では判定不能となり、常に非対応として扱われる。
+#
+# XDG_RUNTIME_DIR とロックについて:
+# - XDG_RUNTIME_DIR は systemd-logind (pam_systemd) がログインセッションに
+#   対して用意する、ユーザー専用のランタイムディレクトリであることを前提に
+#   使用する。本スクリプトはこのディレクトリを作成せず、フォールバックも
+#   行わない。/tmp は使用しない。
+# - 使用前に、実在するディレクトリであること・シンボリックリンクでない
+#   こと・書き込み可能であること・所有UIDが実行ユーザーと一致することを
+#   確認する。いずれかを満たさない場合は、そのディレクトリへ一切手を
+#   加えず (chmod 等もしない)、日本語の理由を標準エラーへ出力して
+#   非0で終了する。
+# - すべての条件を満たす場合のみ、$XDG_RUNTIME_DIR/mypocketos-power.lock を
+#   mkdir で排他的に作成し、多重起動 (ダイアログの多重表示) を防止する。
+#   既にロックが存在する場合は、何もせず終了コード0で終了する。
+
+set -u
+
+PROG_NAME='mypocketos-power'
+
+usage() {
+    printf 'usage: %s {logout|reboot|poweroff|firmware}\n' "$PROG_NAME" >&2
+    exit 2
+}
+
+# ---- XDG_RUNTIME_DIR の検証 ------------------------------------------------
+check_runtime_dir() {
+    if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+        printf '%s: XDG_RUNTIME_DIR が設定されていないため実行できません。\n' \
+            "$PROG_NAME" >&2
+        exit 1
+    fi
+
+    # シンボリックリンクは使用しない (test -L はリンク自体を判定し、
+    # 実体をたどらない。-d より先に判定する必要がある)
+    if [ -L "$XDG_RUNTIME_DIR" ]; then
+        printf '%s: XDG_RUNTIME_DIR (%s) はシンボリックリンクのため使用しません。\n' \
+            "$PROG_NAME" "$XDG_RUNTIME_DIR" >&2
+        exit 1
+    fi
+
+    if [ ! -d "$XDG_RUNTIME_DIR" ]; then
+        printf '%s: XDG_RUNTIME_DIR (%s) が存在するディレクトリではありません。\n' \
+            "$PROG_NAME" "$XDG_RUNTIME_DIR" >&2
+        exit 1
+    fi
+
+    if [ ! -w "$XDG_RUNTIME_DIR" ]; then
+        printf '%s: XDG_RUNTIME_DIR (%s) に書き込めません。\n' \
+            "$PROG_NAME" "$XDG_RUNTIME_DIR" >&2
+        exit 1
+    fi
+
+    dir_uid="$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null)"
+    my_uid="$(id -u)"
+    if [ -z "$dir_uid" ] || [ "$dir_uid" != "$my_uid" ]; then
+        printf '%s: XDG_RUNTIME_DIR (%s) の所有者が実行ユーザーと一致しません。\n' \
+            "$PROG_NAME" "$XDG_RUNTIME_DIR" >&2
+        exit 1
+    fi
+}
+
+# ---- 多重起動防止用ロック ----------------------------------------------
+cleanup() {
+    rmdir "$LOCK_DIR" 2>/dev/null
+}
+
+acquire_lock() {
+    check_runtime_dir
+
+    LOCK_DIR="$XDG_RUNTIME_DIR/mypocketos-power.lock"
+
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        # 既に本スクリプトのダイアログが起動中のため、何もせず終了する
+        exit 0
+    fi
+    trap cleanup EXIT INT TERM HUP
+}
+
+# ---- ダイアログ -----------------------------------------------------------
+# 確認ダイアログ。OK (終了コード0) が押された場合のみ真を返す。
+confirm() {
+    yad --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+        --width=380 --text="$1" \
+        --button="キャンセル:1" --button="OK:0"
+    [ $? -eq 0 ]
+}
+
+notice() {
+    yad --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+        --width=380 --text="$1" \
+        --button="閉じる:0" >/dev/null 2>&1
+}
+
+# ---- 各操作 -----------------------------------------------------------
+do_logout() {
+    confirm "$(printf 'ログアウトしますか?\n保存していないデータが失われる可能性があります。')" || return 0
+    if ! openbox --exit; then
+        notice 'ログアウトできませんでした。'
+    fi
+}
+
+do_reboot() {
+    confirm '再起動しますか?' || return 0
+    if ! systemctl reboot; then
+        notice '再起動できませんでした。'
+    fi
+}
+
+do_poweroff() {
+    confirm '電源を切りますか?' || return 0
+    if ! systemctl poweroff; then
+        notice '電源を切ることができませんでした。'
+    fi
+}
+
+do_firmware() {
+    # 参考情報: UEFI起動かどうか (対応可否そのものの判定には使わない)
+    if [ -d /sys/firmware/efi ]; then
+        is_uefi='yes'
+    else
+        is_uefi='no'
+    fi
+
+    # 実際の対応可否判定 (org.freedesktop.login1.Manager.CanRebootToFirmwareSetup)
+    can_fw="$(busctl call org.freedesktop.login1 /org/freedesktop/login1 \
+        org.freedesktop.login1.Manager CanRebootToFirmwareSetup 2>/dev/null \
+        | cut -d'"' -f2)"
+
+    if [ "$can_fw" != 'yes' ]; then
+        notice "$(printf 'この端末またはユーザー権限では、ファームウェア設定画面への再起動に対応していません。\n(UEFI起動: %s / 判定結果: %s)' \
+            "$is_uefi" "${can_fw:-判定不能}")"
+        return 0
+    fi
+
+    confirm 'ファームウェア設定画面へ再起動しますか?' || return 0
+    if ! systemctl reboot --firmware-setup; then
+        notice 'ファームウェア設定への再起動を開始できませんでした。'
+    fi
+}
+
+show_menu() {
+    yad --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+        --width=380 --text='操作を選択してください' \
+        --button="ログアウト:10" \
+        --button="再起動:11" \
+        --button="電源オフ:12" \
+        --button="ファームウェア設定:13" \
+        --button="キャンセル:1"
+    case $? in
+        10) do_logout ;;
+        11) do_reboot ;;
+        12) do_poweroff ;;
+        13) do_firmware ;;
+        *) : ;;
+    esac
+}
+
+# ---- 引数解析 (case文で限定) --------------------------------------------
+if [ $# -eq 0 ]; then
+    ACTION='menu'
+elif [ $# -eq 1 ]; then
+    ACTION="$1"
+else
+    usage
+fi
+
+case "$ACTION" in
+    logout|reboot|poweroff|firmware|menu)
+        ;;
+    *)
+        usage
+        ;;
+esac
+
+acquire_lock
+
+case "$ACTION" in
+    logout)   do_logout ;;
+    reboot)   do_reboot ;;
+    poweroff) do_poweroff ;;
+    firmware) do_firmware ;;
+    menu)     show_menu ;;
+esac

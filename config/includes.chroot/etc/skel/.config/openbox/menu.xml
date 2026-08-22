@@ -3,10 +3,16 @@
 <!--
   MyPocketOS - Openbox 右クリックメニュー (デスクトップ右クリック)
   jgmenu (アプリメニュー) と併用する最小構成。
-  電源オフ・再起動・ファームウェア設定は別工程 (安全な共通スクリプトと
-  確認ダイアログ) で実装するため、ここには含めない。
 
-  参照: /etc/xdg/openbox/menu.xml (openbox 3.6.1, Debian 13 trixie 標準)
+  電源・セッション操作は systemctl コマンドや openbox の終了オプションを
+  直接書かず、確認ダイアログと安全確認をまとめた
+  /usr/local/bin/mypocketos-power (POSIX sh) へ委譲する。
+  ネスト形式のサブメニュー構文は openbox 3.6.1 の details.html にある
+  "Submenus can also be nested directly into the containing menu" の
+  記述を参照した。
+
+  参照: /etc/xdg/openbox/menu.xml, /usr/share/doc/openbox/{details.html,menu.xsd.gz}
+        (openbox 3.6.1, Debian 13 trixie 標準)
 -->
 <openbox_menu xmlns="http://openbox.org/"
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -28,9 +34,21 @@
   <item label="Openbox再設定">
     <action name="Execute"><execute>openbox --reconfigure</execute></action>
   </item>
-  <item label="ログアウト">
-    <action name="Execute"><execute>openbox --exit</execute></action>
-  </item>
+  <separator />
+  <menu id="mypocketos-power-menu" label="電源・セッション">
+    <item label="ログアウト">
+      <action name="Execute"><execute>mypocketos-power logout</execute></action>
+    </item>
+    <item label="再起動">
+      <action name="Execute"><execute>mypocketos-power reboot</execute></action>
+    </item>
+    <item label="電源オフ">
+      <action name="Execute"><execute>mypocketos-power poweroff</execute></action>
+    </item>
+    <item label="ファームウェア設定">
+      <action name="Execute"><execute>mypocketos-power firmware</execute></action>
+    </item>
+  </menu>
 </menu>
 
 </openbox_menu>
