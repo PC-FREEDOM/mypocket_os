@@ -14,6 +14,9 @@
 /*.packages
 /*.buildlog
 /*.build
+/chroot.packages.install
+/chroot.packages.live
+/wget-log*
 /config/binary
 /config/bootstrap
 /config/chroot
@@ -22,3 +25,10 @@
 
 # lb config が自動生成する live 用パッケージリスト (auto/config 実行のたびに再生成される)
 /config/package-lists/live.list.chroot
+
+# lb configが生成する標準フック
+# MyPocketOS独自フックはmypocketos-で始める
+/config/hooks/live/*
+!/config/hooks/live/mypocketos-*
+/config/hooks/normal/*
+!/config/hooks/normal/mypocketos-*
