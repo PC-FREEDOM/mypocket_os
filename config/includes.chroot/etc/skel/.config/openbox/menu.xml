@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  MyPocketOS - Openbox 右クリックメニュー (デスクトップ右クリック)
+  jgmenu (アプリメニュー) と併用する最小構成。
+  電源オフ・再起動・ファームウェア設定は別工程 (安全な共通スクリプトと
+  確認ダイアログ) で実装するため、ここには含めない。
+
+  参照: /etc/xdg/openbox/menu.xml (openbox 3.6.1, Debian 13 trixie 標準)
+-->
+<openbox_menu xmlns="http://openbox.org/"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://openbox.org/
+                file:///usr/share/openbox/menu.xsd">
+
+<menu id="root-menu" label="MyPocketOS">
+  <item label="アプリケーションメニュー">
+    <action name="Execute"><execute>jgmenu_run</execute></action>
+  </item>
+  <separator />
+  <item label="端末">
+    <action name="Execute"><execute>lxterminal</execute></action>
+  </item>
+  <item label="ファイルマネージャー">
+    <action name="Execute"><execute>pcmanfm</execute></action>
+  </item>
+  <separator />
+  <item label="Openbox再設定">
+    <action name="Execute"><execute>openbox --reconfigure</execute></action>
+  </item>
+  <item label="ログアウト">
+    <action name="Execute"><execute>openbox --exit</execute></action>
+  </item>
+</menu>
+
+</openbox_menu>

@@ -50,6 +50,9 @@ Debian 13 (trixie) 上で live-build を使い、ISOイメージをビルドし�
 - jgmenuアプリメニュー
 - tint2メニューボタン
 - Openbox右クリックメニューとの併用
+- Conkyシステム情報表示
+- Openboxキーボードショートカット
+- 日本語Openbox右クリックメニュー
 
 以下は未実装です (今後の課題)。
 
@@ -64,3 +67,30 @@ Debian 13 (trixie) 上で live-build を使い、ISOイメージをビルドし�
 - jgmenuの検索入力は英字検索のみ動作確認済みです。Fcitx5-Mozcを使用した日本語検索は
   現時点では正常に機能しません。日本語でのメニュー表示、およびカテゴリからのアプリ
   起動には影響しません。
+
+## Live環境のログイン
+
+MyPocketOSのLive環境は、通常起動時にlive-configの自動ログイン機能により
+自動的にデスクトップへログインします（ユーザー操作は不要です）。
+
+Openbox右クリックメニューの「ログアウト」を選択すると、LightDMのログイン画面へ
+戻ります。ログイン画面から再ログインする場合の既定のユーザー名・パスワードは
+次のとおりです。
+
+- ユーザー名: `user`
+- パスワード: `live`
+
+これは `live-config`（`0030-live-debconfig_passwd` スクリプト、コメント
+"Default password is: live"）が設定するDebian Live標準の既定値であり、
+MyPocketOS独自の設定ではありません。また、将来実装予定の通常インストール環境
+（Calamares等）で作成されるユーザーアカウントの認証情報とは別のものです。
+
+VMでの動作確認により、Openbox右クリックメニューの「ログアウト」を実行して
+LightDMのログイン画面へ正常に戻ること、および上記の既定値（`user` / `live`）で
+LightDMから再ログインできることを確認済みです。再ログイン後は以下も確認済みです。
+
+- `whoami` が `user` を返す
+- `hostname` が `mypocketos` を返す
+- Openboxが1プロセスのみ起動している（多重起動なし）
+- Conkyが1プロセスのみ起動している（`-U`オプションによる多重起動防止が機能）
+- tint2・PCManFM・Conkyが正常に再表示される
