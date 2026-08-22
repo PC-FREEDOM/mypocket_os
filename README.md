@@ -121,6 +121,75 @@ Live環境の起動パラメータ (`auto/config` の `--bootappend-live`) に
 
 今回のテスト結果は次のとおりです。
 
-- 「電源・セッション」→「再起動」から `systemctl reboot` が実行され、
-  シャットダウン処理が開始されることは確認済みです。
-- `noeject` 適用後に再起動が正常に完了することは、今回未確認です。
+- 「電源・セッション」→「再起動」(`mypocketos-power`) から `systemctl reboot`
+  が実行され、`noeject` によりメディアの取り外し待ちが表示されないことを
+  確認しました。
+- 永続VM `mypocketos-test` で、同じISOを接続したままLive環境へ再起動できる
+  ことを確認しました。
+- 再起動後、`hostname` が `mypocketos` を返すこと、稼働時間がリセットされて
+  いること、`/proc/cmdline` 内に `noeject` が1件だけ含まれていることを
+  確認しました。
+
+## QEMU/KVM検証環境
+
+`scripts/create-test-vm.sh` と `scripts/update-test-iso.sh` は、
+**MyPocketOSのISO内ではなく、開発ホスト (Debianで virt-install/virsh/QEMU/KVM
+がセットアップ済みの環境) で実行するスクリプト**です。ビルドしたISOを
+QEMU/KVM上のVMで手軽に確認するためのものであり、MyPocketOS自体には含まれません。
+
+前提として、`qemu:///system` が使えること (libvirtの `default` ネットワークが
+active であること)、および `sudo` が使えることが必要です。
+
+### 初回作成
+
+```sh
+./scripts/build.sh                 # ISOをビルド (未実施の場合)
+./scripts/create-test-vm.sh
+```
+
+`live-image-amd64.hybrid.iso` を `/var/lib/libvirt/images/MyPocketOS-dev.iso`
+へコピーし (コピー後にSHA-256を照合)、`mypocketos-test` という名前の永続VMを
+`qemu:///system` に作成して起動します。VMはこのISOから直接Live起動します
+(`--import` によりインストーラは起動しません)。
+
+VMには16GiBのqcow2仮想ディスクも接続されますが、**これは将来のインストーラ
+検証用であり、現時点のLive起動には使用しません**(起動順序はCD-ROMが先、
+仮想ディスクが後です)。
+
+### ISO再ビルド後の更新手順
+
+```sh
+virsh --connect qemu:///system shutdown mypocketos-test   # VMを停止
+./scripts/build.sh                                        # ISOを再ビルド
+./scripts/update-test-iso.sh                               # ISOのみを更新
+virsh --connect qemu:///system start mypocketos-test       # VMを起動
+```
+
+`update-test-iso.sh` は、`mypocketos-test` が存在しない場合や、状態が厳密に
+「停止 (shut off)」でない場合 (実行中・一時停止中・状態取得失敗などを含む)は
+何もせず失敗します。VM定義や仮想ディスクには一切触れず、ISOファイルのみを
+更新します。
+
+### 動作確認
+
+実機でのテストにより、次を確認済みです。
+
+- `create-test-vm.sh` で永続VM `mypocketos-test` を作成できたこと
+- CD-ROMが `boot.order=1`、仮想ディスクが `boot.order=2` であること
+- SPICE・クリップボード共有・spice-vdagentが動作すること
+- VM実行中に `update-test-iso.sh` を実行するとISO交換が拒否されること
+- VM停止後は、ISOの更新とSHA-256の一致確認に成功すること
+- 更新後、同じVMからMyPocketOSをLive起動できること
+
+### virt-managerで開く
+
+virt-managerを起動し、`QEMU/KVM` (qemu:///system) の接続の下に
+`mypocketos-test` が表示されます。ダブルクリックするとSPICE経由で画面に
+接続できます (`listen=127.0.0.1` のためホスト上でのみ接続可能です)。
+
+### VMの削除について
+
+これらのスクリプトは、VM・仮想ディスク・ISOを削除する機能を意図的に
+実装していません。不要になった場合は、virt-managerで対象のVM名が
+`mypocketos-test` であることを確認したうえで、手動で管理してください
+(誤削除防止のため、本READMEでは削除コマンドは案内しません)。
