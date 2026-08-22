@@ -45,3 +45,12 @@ fcitx5-frontend-gtk3
 
 # ---- 仮想環境統合（SPICE） ----
 spice-vdagent
+
+# ---- 音声 (PipeWire) ----
+pipewire-audio
+pavucontrol
+pasystray
+pamixer
+
+# ---- zram (圧縮スワップ) ----
+zram-tools

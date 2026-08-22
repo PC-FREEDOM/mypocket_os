@@ -8,3 +8,4 @@ nm-applet &
 lxpolkit &
 fcitx5 &
 spice-vdagent &
+(sleep 2 && pasystray) &

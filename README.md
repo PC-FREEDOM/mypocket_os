@@ -44,6 +44,9 @@ Debian 13 (trixie) 上で live-build を使い、ISOイメージをビルドし�
 - 日本語ロケール (ja_JP.UTF-8) ・ 日本語キーボード (jp) ・ タイムゾーン (Asia/Tokyo)
 - Noto CJKフォント / Fcitx5-Mozc
 - SPICEクリップボード・画面統合
+- PipeWire音声基盤
+- 音量設定とトレイアイコン
+- zram圧縮スワップ
 
 以下は未実装です (今後の課題)。
 
