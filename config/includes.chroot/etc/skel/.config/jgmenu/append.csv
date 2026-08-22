@@ -1,0 +1,16 @@
+# MyPocketOS - jgmenu 追加項目 (ルートメニューの末尾に追加される)
+#
+# jgmenu-apps(1) (csv_cmd=apps) は $HOME/.config/jgmenu/append.csv が存在する場合、
+# その内容を生成した CSV の末尾に付加する。
+# フィールド・書式は jgmenu(1) の Fields / Markup を参照。
+# 電源操作は systemctl 等を直接書かず、mypocketos-power へ委譲する。
+# (実際に jgmenu-apps で生成し、この内容が末尾に含まれることを確認済み)
+
+^sep()
+電源・セッション,^checkout(power)
+
+^tag(power)
+ログアウト,mypocketos-power logout
+再起動,mypocketos-power reboot
+電源オフ,mypocketos-power poweroff
+ファームウェア設定,mypocketos-power firmware
