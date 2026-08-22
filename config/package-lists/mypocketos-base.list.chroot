@@ -54,3 +54,6 @@ pamixer
 
 # ---- zram (圧縮スワップ) ----
 zram-tools
+
+# ---- アプリメニュー (jgmenu) ----
+jgmenu
