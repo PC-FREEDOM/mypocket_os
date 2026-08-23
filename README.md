@@ -193,3 +193,162 @@ virt-managerを起動し、`QEMU/KVM` (qemu:///system) の接続の下に
 実装していません。不要になった場合は、virt-managerで対象のVM名が
 `mypocketos-test` であることを確認したうえで、手動で管理してください
 (誤削除防止のため、本READMEでは削除コマンドは案内しません)。
+
+## Live永続化基盤
+
+- 起動メニューは、通常Liveと永続Liveで分かれています
+  (BIOS/Syslinux: `MyPocketOS Live` / `MyPocketOS Live (Persistence)` /
+  `MyPocketOS Live (Fail-safe)` の3ラベル。UEFI/GRUB も同名の3項目)。
+- 通常Liveには `nopersistence`、永続Liveには `persistence` の起動
+  パラメータが付きます。
+- 現段階で永続化の対象となるのは `/home` のみです。
+- 永続化には、ext4でフォーマットしラベルを `persistence` にした
+  パーティションと、そのルートに置く `persistence.conf` (中身は
+  `/home` の1行だけ) が必要です。
+- 暗号化 (LUKS等) は未実装です。
+- GUIによるパーティション作成は未実装です。
+- `/home` 配下の一般アプリ設定・ユーザーデータは保存対象です。
+- 追加インストールしたアプリ本体、パッケージ一覧、APTキャッシュの永続化は
+  未実装です。
+
+### `/` unionを採用しない理由
+
+- `/` unionはシステム全体の変更を保存する方式であり、カーネルやLive基盤を
+  ISO更新によって提供するという方針と衝突します。
+- 今回はユーザーデータとホームディレクトリ配下の設定だけを永続化の対象と
+  します。
+- 一般アプリの永続化は、将来的にパッケージ一覧とAPTキャッシュを使う
+  別機能として実装する予定です。
+
+### 手動テスト手順 (開発用VM専用)
+
+**警告**
+
+- この手順は開発用VM `mypocketos-test` 専用です。
+- 対象デバイス (`/dev/vda`) の内容はすべて失われます。
+- 実機やUSBメモリでは実行しないでください。
+- デバイスが `/dev/vda` であることを確認できない場合は中止してください。
+- 実際のデバイス名は環境により異なるため、この手順の `/dev/vda` は
+  製品利用者向けの一般化された手順ではありません。
+
+手順:
+
+1. VM `mypocketos-test` 上のLive環境で、`lsblk` を実行し、`/dev/vda` が
+   16GiBの空ディスク (CD-ROMではない) であることを確認する。
+
+   ```sh
+   lsblk
+   ```
+
+2. `parted` でGPTと、ext4用のパーティション `/dev/vda1` を作成し、
+   カーネルにパーティション情報を再読込させてから、`/dev/vda1` が
+   実際に存在することを確認する。**ここで `/dev/vda1` の存在を
+   確認できない場合は、以降の手順に進まず中止する。**
+
+   ```sh
+   sudo parted -s /dev/vda -- mklabel gpt
+   sudo parted -s /dev/vda -- mkpart persistence ext4 1MiB 100%
+   sudo partprobe /dev/vda
+   sudo udevadm settle
+   lsblk -f /dev/vda
+   ```
+
+3. `/dev/vda1` をext4でフォーマットし、ラベルを `persistence` にする。
+
+   ```sh
+   sudo mkfs.ext4 -L persistence /dev/vda1
+   ```
+
+4. 一時的にマウントする。
+
+   ```sh
+   sudo mkdir -p /mnt/persistence
+   sudo mount /dev/vda1 /mnt/persistence
+   ```
+
+5. `persistence.conf` を作成する (中身は `/home` の1行のみ)。シェルの
+   リダイレクトでは書き込み権限の問題が起きうるため、`tee` を使う。
+   作成後は内容を確認する。
+
+   ```sh
+   printf '/home\n' | sudo tee /mnt/persistence/persistence.conf >/dev/null
+   cat /mnt/persistence/persistence.conf
+   ```
+
+6. 同期してアンマウントする。
+
+   ```sh
+   sync
+   sudo umount /mnt/persistence
+   ```
+
+7. VMを再起動し、ブートメニューから「MyPocketOS Live (Persistence)」を
+   選択する。
+
+8. 永続Liveで起動した直後、テストファイルを作成する前に、永続化が
+   実際に有効になっていることを確認する。`/home` がラベル `persistence`
+   の `/dev/vda1` から提供されていることを確認できてから次に進む。
+
+   ```sh
+   findmnt --target /home
+   lsblk -f
+   ```
+
+9. `/home/user` にテストファイルを作成する (例: `touch ~/persistence-test`)。
+
+10. 永続Liveで再起動し、テストファイルが残っていることを確認する。
+
+11. 通常Live (`MyPocketOS Live`) で起動し、同じファイルが見えないことを
+    確認する。
+
+12. 再び永続Liveで起動し、テストファイルが見えることを確認する。
+
+### 動作確認
+
+以下は、開発用QEMU/KVM VM `mypocketos-test` 上で、BIOS/Syslinux起動により
+実際に確認した内容です。検証環境は、16GiBの空の `/dev/vda` に対して
+`/dev/vda1` をext4で作成し、ファイルシステムラベルを `persistence`、
+`persistence.conf` の内容を `/home` の1行としたものです。
+
+1. BIOS/Syslinuxの起動メニューに、次の3項目が表示されることを確認しました。
+   - `MyPocketOS Live`
+   - `MyPocketOS Live (Persistence)`
+   - `MyPocketOS Live (Fail-safe)`
+
+2. 通常Live (`MyPocketOS Live`) では次を確認しました。
+   - カーネルコマンドラインに `nopersistence` が1件、`persistence` が
+     0件であること
+   - `/home` がLive環境のoverlayであること
+   - `/dev/vda1` がマウントされないこと
+   - 永続領域内に作成したテストファイルが表示されないこと
+
+3. Persistenceモード (`MyPocketOS Live (Persistence)`) では次を確認しました。
+   - カーネルコマンドラインに `persistence` が1件、`nopersistence` が
+     0件であること
+   - `/home` が `/dev/vda1[/home]` としてマウントされていること
+   - `/home/user` が `user:user` 所有、パーミッション `0700` で
+     作成されていること
+
+4. `/home/user/persistence-test` を作成し、Persistenceモードで再起動した
+   後も、内容と所有者が維持されていることを確認しました。
+
+5. 通常Liveへ切り替えるとテストファイルは表示されず、再びPersistenceモード
+   へ戻ると同じ内容で再表示されることを確認しました。
+
+6. 各再起動でカーネルの `boot_id` が変化していることを確認しており、
+   同一セッション内の見かけ上の確認ではないことを確認しています。
+
+**未確認事項**
+
+- UEFI/GRUB設定 (`config/bootloaders/grub-pc/grub.cfg`) は、生成された
+  設定ファイルの静的検証 (`grub-script-check` 等) には合格していますが、
+  UEFI VMでの実際の起動メニュー表示およびPersistence起動そのものは
+  今回未確認です。
+- GUIによる永続領域作成は未実装です。
+- LUKSによる暗号化は未実装です。
+- 追加インストールしたアプリ本体、パッケージ一覧、APTキャッシュの
+  永続化は未実装です。
+
+上記のとおり、「動作確認済み」の範囲はBIOS/Syslinuxおよび `/home` の
+永続化に限定されます。UEFI/GRUBや、GUI作成・暗号化・アプリ本体の永続化
+といった未実装機能については、確認済みとはみなしていません。

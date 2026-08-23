@@ -1,0 +1,24 @@
+# MyPocketOS - BIOS/Syslinux 起動メニュー
+#
+# Debian live-build標準テンプレートを基にした。
+# 通常Live、永続Live、Fail-safeを明示的に定義する。
+# 置換トークンの詳細は/usr/lib/live/build/binary_syslinuxで確認済み。
+
+label live-@FLAVOUR@
+	menu label ^MyPocketOS Live
+	menu default
+	linux @LINUX@
+	initrd @INITRD@
+	append @APPEND_LIVE@ nopersistence
+
+label live-@FLAVOUR@-persistence
+	menu label MyPocketOS Live (Persistence)
+	linux @LINUX@
+	initrd @INITRD@
+	append @APPEND_LIVE@ persistence
+
+label live-@FLAVOUR@-failsafe
+	menu label MyPocketOS Live (Fail-safe)
+	linux @LINUX@
+	initrd @INITRD@
+	append @APPEND_LIVE_FAILSAFE@
