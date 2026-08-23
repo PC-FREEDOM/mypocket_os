@@ -142,57 +142,104 @@ active であること)、および `sudo` が使えることが必要です。
 
 ### 初回作成
 
+BIOS版VMを作成します (引数なしは従来互換で、明示的に `--firmware bios` を
+指定した場合と同じ設定になります)。
+
 ```sh
 ./scripts/build.sh                 # ISOをビルド (未実施の場合)
 ./scripts/create-test-vm.sh
 ```
 
-`live-image-amd64.hybrid.iso` を `/var/lib/libvirt/images/MyPocketOS-dev.iso`
-へコピーし (コピー後にSHA-256を照合)、`mypocketos-test` という名前の永続VMを
-`qemu:///system` に作成して起動します。VMはこのISOから直接Live起動します
-(`--import` によりインストーラは起動しません)。
+明示的にBIOSを指定する場合:
 
-VMには16GiBのqcow2仮想ディスクも接続されますが、**これは将来のインストーラ
-検証用であり、現時点のLive起動には使用しません**(起動順序はCD-ROMが先、
-仮想ディスクが後です)。
+```sh
+./scripts/create-test-vm.sh --firmware bios
+```
+
+UEFI版VMを作成する場合:
+
+```sh
+./scripts/create-test-vm.sh --firmware uefi
+```
+
+いずれも `live-image-amd64.hybrid.iso` を
+`/var/lib/libvirt/images/MyPocketOS-dev.iso` へコピーし (コピー後にSHA-256を
+照合)、`qemu:///system` に永続VMを作成して起動します。VMはこのISOから直接
+Live起動します (`--import` によりインストーラは起動しません)。
+
+BIOS版とUEFI版の違いは次のとおりです。
+
+| | BIOS (既定) | UEFI |
+|---|---|---|
+| VM名 | `mypocketos-test` | `mypocketos-uefi-test` |
+| 仮想ディスク | `mypocketos-test.qcow2` | `mypocketos-uefi-test.qcow2` |
+| ファームウェア | レガシーBIOS | OVMF (UEFI) |
+| TPM | なし | `--tpm none` (TPMデバイスなし) |
+
+RAM 2048MiB・vCPU 2・16GiBのqcow2仮想ディスク・CD-ROM (`boot.order=1`)・
+仮想ディスク (`boot.order=2`)・SPICE (クリップボード共有あり)・spicevmc・
+virtioビデオ・ich9サウンド・自動起動なしは、BIOS版・UEFI版で共通です。
+
+**両VMは同じ `MyPocketOS-dev.iso` を共有します。** VMには16GiBのqcow2仮想
+ディスクも接続されており、起動順序はCD-ROMが先、仮想ディスクが後です。
+作成直後のこのqcow2は空です。「Live永続化基盤」の手動テスト手順では、
+このディスクをpersistenceパーティションとして初期化して使用します。
+将来的にはインストーラ検証にも利用する予定です。
 
 ### ISO再ビルド後の更新手順
 
+`MyPocketOS-dev.iso` はBIOS版・UEFI版の両方から共有されるため、更新前には
+**このISOを参照している全てのVMを停止しておく必要があります**。
+
 ```sh
-virsh --connect qemu:///system shutdown mypocketos-test   # VMを停止
-./scripts/build.sh                                        # ISOを再ビルド
-./scripts/update-test-iso.sh                               # ISOのみを更新
-virsh --connect qemu:///system start mypocketos-test       # VMを起動
+virsh --connect qemu:///system shutdown mypocketos-test        # BIOS版を停止
+virsh --connect qemu:///system shutdown mypocketos-uefi-test   # UEFI版を停止
+./scripts/build.sh                                              # ISOを再ビルド
+./scripts/update-test-iso.sh                                    # ISOのみを更新
 ```
 
-`update-test-iso.sh` は、`mypocketos-test` が存在しない場合や、状態が厳密に
-「停止 (shut off)」でない場合 (実行中・一時停止中・状態取得失敗などを含む)は
-何もせず失敗します。VM定義や仮想ディスクには一切触れず、ISOファイルのみを
-更新します。
+`update-test-iso.sh` は、固定のドメイン名をハードコードせず、このISOを
+実際に参照している全ドメインを毎回動的に検査します。参照しているVMが
+1件も無ければ「更新対象のVMが見つからない」として失敗し、1件以上ある
+場合は、それら全てのVMの状態が厳密に「停止 (shut off)」であるときのみ
+更新を行います (実行中・一時停止中・状態取得失敗などが1件でもあれば、
+何もせず失敗します)。VM定義や仮想ディスクには一切触れず、ISOファイルの
+みを更新します。更新に成功すると、検出した各VMの起動コマンドを表示します。
 
 ### 動作確認
 
-実機でのテストにより、次を確認済みです。
+実機でのテストにより、次を確認済みです。BIOS版とUEFI版で確認済みの範囲が
+異なるため、分けて記載します。
 
-- `create-test-vm.sh` で永続VM `mypocketos-test` を作成できたこと
-- CD-ROMが `boot.order=1`、仮想ディスクが `boot.order=2` であること
-- SPICE・クリップボード共有・spice-vdagentが動作すること
-- VM実行中に `update-test-iso.sh` を実行するとISO交換が拒否されること
-- VM停止後は、ISOの更新とSHA-256の一致確認に成功すること
-- 更新後、同じVMからMyPocketOSをLive起動できること
+- BIOS版は `create-test-vm.sh` で実際に作成済みです。
+- UEFI版は、`create-test-vm.sh` のUEFI対応より前に、同等構成の
+  `virt-install` コマンドを手動で実行して作成・起動し、`/home` の
+  永続化検証まで実施済みです。
+- UEFI対応後の `create-test-vm.sh --firmware uefi` 自体は、
+  `--print-xml --dry-run` によるXML生成と、libvirtスキーマ
+  (`virt-xml-validate`) による検証までを行っています。この更新後
+  スクリプトによるUEFI VMの実際の作成そのものは、今回未実施です。
+- CD-ROMが `boot.order=1`、仮想ディスクが `boot.order=2` であることは
+  BIOS版・UEFI版とも確認済みです。
+- SPICE・クリップボード共有・spice-vdagentが動作すること (BIOS版で確認)。
+- VM実行中に `update-test-iso.sh` を実行するとISO交換が拒否されること。
+- VM停止後は、ISOの更新とSHA-256の一致確認に成功すること。
+- 更新後、同じVMからMyPocketOSをLive起動できること。
 
 ### virt-managerで開く
 
-virt-managerを起動し、`QEMU/KVM` (qemu:///system) の接続の下に
-`mypocketos-test` が表示されます。ダブルクリックするとSPICE経由で画面に
-接続できます (`listen=127.0.0.1` のためホスト上でのみ接続可能です)。
+virt-managerを起動し、`QEMU/KVM` (qemu:///system) の接続の下に、
+BIOS版は `mypocketos-test`、UEFI版は `mypocketos-uefi-test` という名前で
+表示されます。ダブルクリックするとSPICE経由で画面に接続できます
+(`listen=127.0.0.1` のためホスト上でのみ接続可能です)。
 
 ### VMの削除について
 
 これらのスクリプトは、VM・仮想ディスク・ISOを削除する機能を意図的に
 実装していません。不要になった場合は、virt-managerで対象のVM名が
-`mypocketos-test` であることを確認したうえで、手動で管理してください
-(誤削除防止のため、本READMEでは削除コマンドは案内しません)。
+`mypocketos-test` または `mypocketos-uefi-test` であることを確認したうえで、
+手動で管理してください (誤削除防止のため、本READMEでは削除コマンドは
+案内しません)。
 
 ## Live永続化基盤
 
@@ -305,10 +352,13 @@ virt-managerを起動し、`QEMU/KVM` (qemu:///system) の接続の下に
 
 ### 動作確認
 
-以下は、開発用QEMU/KVM VM `mypocketos-test` 上で、BIOS/Syslinux起動により
+以下は、開発用QEMU/KVM VM (BIOS版 `mypocketos-test` およびUEFI版
+`mypocketos-uefi-test`) 上で、BIOS/SyslinuxとUEFI/GRUBの両方の起動経路で
 実際に確認した内容です。検証環境は、16GiBの空の `/dev/vda` に対して
 `/dev/vda1` をext4で作成し、ファイルシステムラベルを `persistence`、
 `persistence.conf` の内容を `/home` の1行としたものです。
+
+**BIOS/Syslinuxでの確認内容**
 
 1. BIOS/Syslinuxの起動メニューに、次の3項目が表示されることを確認しました。
    - `MyPocketOS Live`
@@ -338,17 +388,36 @@ virt-managerを起動し、`QEMU/KVM` (qemu:///system) の接続の下に
 6. 各再起動でカーネルの `boot_id` が変化していることを確認しており、
    同一セッション内の見かけ上の確認ではないことを確認しています。
 
-**未確認事項**
+**UEFI/GRUBでの確認内容**
 
-- UEFI/GRUB設定 (`config/bootloaders/grub-pc/grub.cfg`) は、生成された
-  設定ファイルの静的検証 (`grub-script-check` 等) には合格していますが、
-  UEFI VMでの実際の起動メニュー表示およびPersistence起動そのものは
-  今回未確認です。
+UEFI版VM (`mypocketos-uefi-test`, OVMFによる64-bit UEFI起動) でも、同様に
+次を確認しました。
+
+1. GRUBの起動メニューに、次の3項目が表示されることを確認しました。
+   - `MyPocketOS Live`
+   - `MyPocketOS Live (Persistence)`
+   - `MyPocketOS Live (Fail-safe)`
+
+2. 通常Live (`MyPocketOS Live`) では、カーネルコマンドラインに
+   `nopersistence` が1件・`persistence` が0件であること、`/dev/vda1` が
+   マウントされず永続領域内のテストファイルが見えないことを確認しました。
+
+3. Persistenceモードでは、カーネルコマンドラインに `persistence` が
+   1件・`nopersistence` が0件であること、`/home` が `/dev/vda1[/home]`
+   としてext4でマウントされ、`/home/user` が `user:user` 所有・
+   パーミッション `0700` で作成されていることを確認しました。
+
+4. 再起動後もテストファイルの内容・所有者・パーミッションが維持され、
+   通常Liveへ切り替えると非表示に、Persistenceへ戻すと再表示されること、
+   および再起動ごとにカーネルの `boot_id` が変化することを確認しました。
+
+**未確認・未実装の事項**
+
 - GUIによる永続領域作成は未実装です。
 - LUKSによる暗号化は未実装です。
 - 追加インストールしたアプリ本体、パッケージ一覧、APTキャッシュの
   永続化は未実装です。
 
-上記のとおり、「動作確認済み」の範囲はBIOS/Syslinuxおよび `/home` の
-永続化に限定されます。UEFI/GRUBや、GUI作成・暗号化・アプリ本体の永続化
-といった未実装機能については、確認済みとはみなしていません。
+上記のとおり、BIOS/SyslinuxとUEFI/GRUBの両方で `/home` の永続化を
+確認済みです。GUI作成・暗号化・アプリ本体の永続化といった未実装機能に
+ついては、確認済みとはみなしていません。
