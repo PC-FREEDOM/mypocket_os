@@ -379,46 +379,64 @@ acquire_lock() {
     check_signal
 }
 
-# ---- lock取得後のDEVICE再検証 (終了コード12/13) ----------------------------
-# validate_device_arg / validate_majmin と lock取得の間、および lock取得
-# から本チェックまでの間に状態が変化している可能性を前提に、破壊的操作へ
-# 進む前段階として、対象デバイスの基本属性をもう一度読み取り専用の手段で
-# 再確認する。GUI側の判定はもちろん、本ヘルパー自身の初回検証結果も
-# 無条件には信用しない。
+# ---- DEVICE再検証 (終了コードを引数で受け取る) ------------------------------
+# validate_device_arg / validate_majmin と lock取得の間、lock取得から
+# 破壊的操作までの間、および破壊的操作 (parted) 実行後・mkfs実行前の間で、
+# 対象デバイスの基本属性をもう一度読み取り専用の手段で再確認する。GUI側の
+# 判定はもちろん、本ヘルパー自身の初回検証結果も無条件には信用しない。
+#
+# 破壊的操作 (parted) の前に呼ぶ場合と、後 (パーティション作成済み・mkfs
+# 直前) に呼ぶ場合とで、失敗時に返すべき終了コードの意味が異なる
+# (README.md「helperの終了コード」節: 12/13は破壊的操作開始前の拒否、
+# 21は破壊的操作後の途中失敗)。evalは使わず、呼び出し側が終了コードを
+# 引数として明示的に渡す形にする。
+#   $1 - DEVICE系の不一致 (シンボリックリンク化・不在・非block化・PATH/
+#        TYPE/KNAME/RO不一致) で使う終了コード
+#   $2 - MAJOR:MINOR不一致で使う終了コード
 reverify_device() {
+    device_ec="$1"
+    majmin_ec="$2"
+
+    # 破壊的操作後 (終了コード21) に呼ばれた場合は、GPT/パーティションが
+    # 既に作成済みの途中状態であることをメッセージに明記する。
+    state_note=''
+    if [ "$device_ec" = '21' ]; then
+        state_note=' (GPT/パーティションは作成済みの途中状態です)'
+    fi
+
     if [ -L "$DEVICE" ]; then
-        fail 12 "再検証: DEVICEはシンボリックリンクになっています: $DEVICE"
+        fail "$device_ec" "再検証: DEVICEはシンボリックリンクになっています${state_note}: $DEVICE"
     fi
     if [ ! -e "$DEVICE" ]; then
-        fail 12 "再検証: DEVICEが存在しません: $DEVICE"
+        fail "$device_ec" "再検証: DEVICEが存在しません${state_note}: $DEVICE"
     fi
     if [ ! -b "$DEVICE" ]; then
-        fail 12 "再検証: DEVICEはブロックデバイスではなくなっています: $DEVICE"
+        fail "$device_ec" "再検証: DEVICEはブロックデバイスではなくなっています${state_note}: $DEVICE"
     fi
 
     path_now="$("$CMD_LSBLK" -dn -o PATH -- "$DEVICE" 2>/dev/null)" || path_now=''
     if [ "$path_now" != "$DEVICE" ]; then
-        fail 12 "再検証: lsblkが報告するPATHがDEVICEと一致しません: $DEVICE"
+        fail "$device_ec" "再検証: lsblkが報告するPATHがDEVICEと一致しません${state_note}: $DEVICE"
     fi
 
     type_now="$("$CMD_LSBLK" -dn -o TYPE -- "$DEVICE" 2>/dev/null)" || type_now=''
     if [ "$type_now" != 'disk' ]; then
-        fail 12 "再検証: DEVICEはwhole disk (TYPE=disk) ではなくなっています: $DEVICE"
+        fail "$device_ec" "再検証: DEVICEはwhole disk (TYPE=disk) ではなくなっています${state_note}: $DEVICE"
     fi
 
     kname_now="$("$CMD_LSBLK" -dn -o KNAME -- "$DEVICE" 2>/dev/null)" || kname_now=''
     if [ -z "$kname_now" ] || [ "$kname_now" != "$DEVICE_KNAME" ]; then
-        fail 12 "再検証: DEVICEのKNAMEが初回検証時と一致しません: $DEVICE"
+        fail "$device_ec" "再検証: DEVICEのKNAMEが初回検証時と一致しません${state_note}: $DEVICE"
     fi
 
     ro_now="$("$CMD_LSBLK" -dn -o RO -- "$DEVICE" 2>/dev/null)" || ro_now=''
     if [ "$ro_now" != '0' ]; then
-        fail 12 "再検証: DEVICEは読み取り専用になっています: $DEVICE"
+        fail "$device_ec" "再検証: DEVICEは読み取り専用になっています${state_note}: $DEVICE"
     fi
 
     majmin_now="$("$CMD_LSBLK" -dn -o MAJ:MIN -- "$DEVICE" 2>/dev/null)" || majmin_now=''
     if [ -z "$majmin_now" ] || [ "$majmin_now" != "$MAJMIN_ARG" ]; then
-        fail 13 "再検証: MAJOR:MINORが初回検証時と一致しません: $DEVICE"
+        fail "$majmin_ec" "再検証: MAJOR:MINORが初回検証時と一致しません${state_note}: $DEVICE"
     fi
 }
 
@@ -766,7 +784,7 @@ check_no_existing_partlabel() {
 # 実行順序: 既存persistence領域の検査 (システム全体、終了コード16) を、
 # 子パーティション・PTTYPE・wipefs署名検査 (終了コード15) より先に行う。
 final_verification() {
-    reverify_device
+    reverify_device 12 13
     fetch_disk_rows
 
     if ! check_not_mounted; then
@@ -945,7 +963,9 @@ final_verification
 
 # final_verification完了からpartedによる破壊的操作開始までの間隙を
 # さらに縮小するため、直前にもう一度DEVICEの基本属性を再検証する。
-reverify_device
+# ここはまだ破壊的操作 (parted) の前であるため、失敗時は12/13
+# (破壊的操作開始前の拒否) を使う。
+reverify_device 12 13
 check_signal
 
 stage 'gpt'
@@ -974,7 +994,10 @@ check_signal
 # mkfs直前にも、親DEVICEのPATH/KNAME/TYPE/RO/MAJOR:MINORと、作成された
 # パーティション自身のPATH/TYPE/PKNAME/RO/MAJOR:MINOR (block device・
 # 非symlinkも含む) の両方を改めて確認する (TOCTOU窓のさらなる縮小)。
-reverify_device
+# この時点ではGPT/パーティションを既に作成済みであり、12/13
+# (破壊的操作開始前の拒否) を返すことは許されないため、DEVICE系・
+# MAJOR:MINOR系のいずれの不一致も21 (破壊的操作後の途中失敗) を使う。
+reverify_device 21 21
 reverify_created_partition
 check_signal
 
