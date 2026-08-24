@@ -1,0 +1,739 @@
+#!/bin/sh
+#
+# mypocketos-persistence-setup - MyPocketOS 永続領域作成GUI (一般ユーザー権限)
+#
+# README.md の「GUIによる永続領域作成 (設計)」節に基づく実装。本スクリプト
+# 自身は破壊的操作を一切行わない。候補デバイスの列挙・絞り込みは一般ユーザー
+# 権限で読み取れる範囲の情報 (lsblk・findmnt・sysfs) だけを用いた「予備的な
+# 絞り込み」に過ぎず、セキュリティ境界ではない。最終的な安全判定は、確認後に
+# 1回だけ sudo -n 経由で呼び出す特権ヘルパー
+# (/usr/local/libexec/mypocketos-persistence-setup-helper、監査済み・
+# 本スクリプトからは一切変更しない) が破壊的操作の直前に行う。
+#
+# 設計方針:
+# - POSIX sh (dash) で動作する。set -eu。eval は使用しない。
+# - 確認完了までは sudo を一度も実行しない。sudo によるヘルパー呼び出しは
+#   ユーザーが type-to-confirm 画面を完了した後の1回だけに限定する。
+# - mypocketos-power と同じ体裁 (yad、--center --on-top --skip-taskbar) で
+#   ダイアログを表示する。同じ XDG_RUNTIME_DIR 検証・mkdir排他ロック方式を
+#   踏襲する。
+# - ヘルパーはバックグラウンド実行してPIDを保持し、wait で正確な終了コードを
+#   取得する。単純な `helper | yad --progress` のようなパイプは、正確な
+#   終了コードを失いやすいため使わない (ヘルパーの標準出力・標準エラーは
+#   通常ファイルへリダイレクトし、進捗ダイアログはヘルパーとは独立した
+#   別プロセスとして並行表示する)。ヘルパー開始後、ユーザーが進捗ダイアログ
+#   を閉じてもヘルパーは強制終了しない (進捗ダイアログのプロセスとヘルパーの
+#   プロセスは完全に独立しており、一方を終了させても他方には影響しない)。
+# - ヘルパーの終了コードは README.md の「helperの終了コード」節の定義に
+#   厳密に従って日本語メッセージへ対応付ける。未知の終了コードは成功として
+#   扱わず、「未分類のエラー」として表示する。ヘルパーの標準エラーは、
+#   失敗時に補足情報として表示するだけの文字列として扱い、コマンドとしては
+#   一切解釈・実行しない。
+#
+set -eu
+
+umask 077
+
+PROG_NAME='mypocketos-persistence-setup'
+HELPER='/usr/local/libexec/mypocketos-persistence-setup-helper'
+
+# 固定した安全なPATH。
+PATH='/usr/bin:/bin:/usr/sbin:/sbin'
+export PATH
+
+# ---- 状態 (trapによる後始末で参照する) -------------------------------------
+GUI_LOCK_DIR=''
+WORK_DIR=''
+PROGRESS_PID=''
+
+# 受信したがまだ処理していないシグナルの終了コード (129=HUP, 130=INT,
+# 143=TERM)。helperの実行中はこれをセットするだけにとどめ、安全な
+# チェックポイント (check_signal) でのみ実際にexitする。これにより、
+# helper待機中にシグナルを受けてもhelperを強制終了したり、WORK_DIR・
+# GUIロックをhelperの終了前に削除したりしない。
+SIGNAL_PENDING=''
+
+usage() {
+    printf 'usage: %s\n' "$PROG_NAME" >&2
+    exit 2
+}
+
+# 標準エラーへ日本語メッセージを出し、可能であればyadでも表示する
+# (yad自体が使えない壊れた環境でも、標準エラーへの出力は必ず行う)。
+die_env() {
+    printf '%s: %s\n' "$PROG_NAME" "$1" >&2
+    notice "$1" 2>/dev/null || :
+    exit 1
+}
+
+on_hup()  { [ -n "$SIGNAL_PENDING" ] || SIGNAL_PENDING=129; }
+on_int()  { [ -n "$SIGNAL_PENDING" ] || SIGNAL_PENDING=130; }
+on_term() { [ -n "$SIGNAL_PENDING" ] || SIGNAL_PENDING=143; }
+
+# 安全なチェックポイントでのみ呼び出す。保留中のシグナルがあれば、その
+# シグナルに対応する終了コードで直ちにexitする (通常のEXIT trapによる
+# 後始末はそのまま働く)。
+check_signal() {
+    if [ -n "$SIGNAL_PENDING" ]; then
+        exit "$SIGNAL_PENDING"
+    fi
+}
+
+# ---- 後始末 (trap) ---------------------------------------------------------
+# 自身が作成した一時ファイル・GUIロック・進捗ダイアログだけを削除/終了
+# する。他プロセス (helper自身を含む) には一切干渉しない。EXITでのみ
+# 発火させ、INT/TERM/HUP単独では発火させない (helper待機中に届いた
+# シグナルでWORK_DIR・GUIロックが消えたり、helperの結果確定前に進捗
+# ダイアログ以外へ影響したりしないようにするため)。
+cleanup() {
+    if [ -n "$PROGRESS_PID" ]; then
+        kill "$PROGRESS_PID" 2>/dev/null || :
+        wait "$PROGRESS_PID" 2>/dev/null || :
+    fi
+    if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
+        rm -rf -- "$WORK_DIR" 2>/dev/null || :
+    fi
+    if [ -n "$GUI_LOCK_DIR" ] && [ -d "$GUI_LOCK_DIR" ]; then
+        rmdir -- "$GUI_LOCK_DIR" 2>/dev/null || :
+    fi
+}
+trap cleanup EXIT
+trap on_hup HUP
+trap on_int INT
+trap on_term TERM
+
+# ---- ダイアログ (mypocketos-power と同じ体裁) ------------------------------
+notice() {
+    yad --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+        --width=420 --text="$1" \
+        --button="閉じる:0" >/dev/null 2>&1
+}
+
+# ---- 引数解析 (このGUIは引数を受け付けない) --------------------------------
+if [ "$#" -ne 0 ]; then
+    usage
+fi
+
+# ---- MyPocketOS Live環境の確認 --------------------------------------------
+# /proc/cmdline は空白区切りでトークン化し、トークン全体が boot=live と
+# 一致することを確認する (部分一致による誤検知を避ける)。
+check_live_env() {
+    cmdline="$(cat /proc/cmdline 2>/dev/null)" || cmdline=''
+    found=0
+    for tok in $cmdline; do
+        if [ "$tok" = 'boot=live' ]; then
+            found=1
+            break
+        fi
+    done
+    if [ "$found" -ne 1 ]; then
+        die_env 'MyPocketOS Live環境 (カーネルコマンドラインのboot=live) を検出できませんでした。'
+    fi
+
+    if ! findmnt -rn --mountpoint /run/live/medium >/dev/null 2>&1; then
+        die_env '/run/live/medium がマウントされていません。'
+    fi
+}
+
+# ---- XDG_RUNTIME_DIR の検証 (mypocketos-power の check_runtime_dir と同じ) --
+check_runtime_dir() {
+    if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+        die_env 'XDG_RUNTIME_DIR が設定されていないため実行できません。'
+    fi
+
+    # シンボリックリンクは使用しない (test -L はリンク自体を判定し、
+    # 実体をたどらない。-d より先に判定する必要がある)
+    if [ -L "$XDG_RUNTIME_DIR" ]; then
+        die_env "XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR) はシンボリックリンクのため使用しません。"
+    fi
+
+    if [ ! -d "$XDG_RUNTIME_DIR" ]; then
+        die_env "XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR) が存在するディレクトリではありません。"
+    fi
+
+    if [ ! -w "$XDG_RUNTIME_DIR" ]; then
+        die_env "XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR) に書き込めません。"
+    fi
+
+    dir_uid="$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null)" || dir_uid=''
+    my_uid="$(id -u)"
+    if [ -z "$dir_uid" ] || [ "$dir_uid" != "$my_uid" ]; then
+        die_env "XDG_RUNTIME_DIR ($XDG_RUNTIME_DIR) の所有者が実行ユーザーと一致しません。"
+    fi
+}
+
+# ---- GUI多重起動防止用ロック (検証済みXDG_RUNTIME_DIR内、mkdirによる排他) --
+acquire_gui_lock() {
+    GUI_LOCK_DIR="$XDG_RUNTIME_DIR/mypocketos-persistence-setup.lock"
+    if ! mkdir "$GUI_LOCK_DIR" 2>/dev/null; then
+        # 既に本GUIが起動中のため、何もせず終了する
+        # (trapで自身のGUI_LOCK_DIRを消さないよう、変数をクリアしておく)
+        GUI_LOCK_DIR=''
+        exit 0
+    fi
+}
+
+# ---- lsblk -P 厳密解析 (helperのextract_fieldと同じ方式) -------------------
+# 標準入力の1行を厳密なトークン列として解析し、指定フィールドの値を
+# 取り出す。FIELD="value" が空白1個区切りのトークンとして行全体を過不足
+# なく構成し、かつ指定フィールドが重複なく厳密に1回出現する場合のみ
+# 成功する。フィールドキー自体が行中に存在しない場合は非0を返す
+# (fail-closed)。FIELD="" のように値が空で存在する場合は正常な成功として
+# 扱う (MODEL/SERIAL/TRAN等では空値が正常なケースであるため)。値中の
+# \xNN エスケープは解釈せずそのまま保持する。
+extract_field() {
+    field="$1"
+    input="$(cat)" || return 1
+    printf '%s\n' "$input" | awk -v field="$field" '
+{
+    line = $0
+    n = length(line)
+    i = 1
+    ok = 1
+    delete seen
+    found = 0
+    foundval = ""
+    while (i <= n) {
+        if (i > 1) {
+            if (substr(line, i, 1) != " ") { ok = 0; break }
+            i++
+        }
+        keystart = i
+        while (i <= n && substr(line, i, 1) != "=") i++
+        if (i > n) { ok = 0; break }
+        key = substr(line, keystart, i - keystart)
+        if (key == "" || key !~ /^[A-Za-z0-9_:]+$/) { ok = 0; break }
+        i++
+        if (i > n || substr(line, i, 1) != "\"") { ok = 0; break }
+        i++
+        valstart = i
+        while (i <= n && substr(line, i, 1) != "\"") i++
+        if (i > n) { ok = 0; break }
+        val = substr(line, valstart, i - valstart)
+        i++
+        if (key in seen) { ok = 0; break }
+        seen[key] = 1
+        if (key == field) { found = 1; foundval = val }
+    }
+    if (!ok) { exit 1 }
+    if (!found) { exit 1 }
+    printf "%s", foundval
+    exit 0
+}
+'
+}
+
+# 空文字・取得失敗の場合は「不明」を返す (推測で補完しない)。
+display_or_unknown() {
+    v="$1"
+    if [ -z "$v" ]; then
+        printf '不明'
+    else
+        printf '%s' "$v"
+    fi
+}
+
+# バイト数を読みやすい GiB 表記へ変換する (表示専用、判定には使わない)。
+# 数値として解釈できない場合はそのままの文字列を返す。
+format_size() {
+    v="$1"
+    case "$v" in
+        '' | *[!0-9]*)
+            printf '%s' "${v:-不明}"
+            ;;
+        *)
+            awk -v b="$v" 'BEGIN { printf "%.1f GiB", b/1073741824 }'
+            ;;
+    esac
+}
+
+# ---- findmntのSOURCEから祖先diskのKNAME一覧 (自分自身を含む) を得る -------
+# lsblk -s (--inverse) は、指定したデバイスから見た祖先を「自分自身→親→
+# …→ルートのdisk」の順に列挙する。overlay/loop/device mapperを介している
+# 場合もカーネルが報告する依存関係をそのままたどる。
+#
+# 戻り値: 0=成功 (祖先一覧を標準出力に返す。除外対象がない場合は空でよい)。
+#         1=失敗 (祖先を安全に確定できない)。呼び出し側はこれをfail-closed
+#         として扱い、候補一覧全体を空にする (除外情報が得られないまま
+#         個々のディスクを候補として提示しない)。
+ancestor_knames_of_source() {
+    src="$1"
+    src="${src%%\[*}"
+    if [ -z "$src" ]; then
+        return 1
+    fi
+    if [ ! -b "$src" ]; then
+        return 1
+    fi
+    chain="$(lsblk -s -P -b -o KNAME -- "$src" 2>/dev/null)" || return 1
+    if [ -z "$chain" ]; then
+        return 1
+    fi
+    printf '%s\n' "$chain" | while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        k="$(printf '%s\n' "$line" | extract_field KNAME)" || exit 1
+        [ -n "$k" ] || exit 1
+        printf '%s\n' "$k"
+    done
+}
+
+# ---- 候補デバイスの列挙・絞り込み (一般ユーザー権限、予備的) ---------------
+# 列挙にはlsblkの既定の表形式出力を解析せず、列を明示したpairs形式を使う。
+# README.md「GUI側の予備的な候補除外」節の全条件を適用する。
+CANDIDATES=''
+
+build_candidates() {
+    all_rows="$(lsblk -b -P -o NAME,KNAME,PATH,MAJ:MIN,TYPE,SIZE,RO,RM,HOTPLUG,MOUNTPOINTS,FSTYPE,PTTYPE,LABEL,PARTLABEL,PKNAME,MODEL,SERIAL,TRAN 2>/dev/null)" || all_rows=''
+    if [ -z "$all_rows" ]; then
+        CANDIDATES=''
+        return 0
+    fi
+
+    # システム全体にLABEL=persistenceまたはPARTLABEL=persistenceが1件でも
+    # あれば、新規作成の候補一覧そのものを空にする。いずれかの行の解析
+    # 自体に失敗した場合も、安全に判定できないため候補一覧全体を空にする
+    # (fail-closed)。
+    label_rc=0
+    label_hits="$(printf '%s\n' "$all_rows" | while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        lbl="$(printf '%s\n' "$line" | extract_field LABEL)" || exit 2
+        plbl="$(printf '%s\n' "$line" | extract_field PARTLABEL)" || exit 2
+        if [ "$lbl" = 'persistence' ] || [ "$plbl" = 'persistence' ]; then
+            printf 'HIT\n'
+        fi
+    done)" || label_rc=$?
+    if [ "$label_rc" -ne 0 ] || [ -n "$label_hits" ]; then
+        CANDIDATES=''
+        return 0
+    fi
+
+    # Live起動元・/home提供元の祖先KNAME一覧 (自分自身+祖先) を集める。
+    # /homeがoverlay (SOURCE=overlay, FSTYPE=overlay) の場合は、独立した
+    # ブロックデバイスに依拠しないため祖先追跡を行わない。SOURCE/FSTYPE
+    # の取得や祖先追跡そのものに失敗した場合は、除外対象を安全に確定
+    # できないため候補一覧全体を空にする (fail-closed)。
+    live_source="$(findmnt -rn -o SOURCE --target /run/live/medium 2>/dev/null)" || live_source=''
+    if [ -z "$live_source" ]; then
+        CANDIDATES=''
+        return 0
+    fi
+    home_info="$(findmnt -rn -P -o SOURCE,FSTYPE --target /home 2>/dev/null)" || home_info=''
+    if [ -z "$home_info" ]; then
+        CANDIDATES=''
+        return 0
+    fi
+    if ! home_source="$(printf '%s\n' "$home_info" | extract_field SOURCE)"; then
+        CANDIDATES=''
+        return 0
+    fi
+    if ! home_fstype="$(printf '%s\n' "$home_info" | extract_field FSTYPE)"; then
+        CANDIDATES=''
+        return 0
+    fi
+
+    if ! excluded_knames="$(ancestor_knames_of_source "$live_source")"; then
+        CANDIDATES=''
+        return 0
+    fi
+    if [ "$home_source" = 'overlay' ] && [ "$home_fstype" = 'overlay' ]; then
+        :
+    else
+        if ! home_chain="$(ancestor_knames_of_source "$home_source")"; then
+            CANDIDATES=''
+            return 0
+        fi
+        excluded_knames="$excluded_knames
+$home_chain"
+    fi
+
+    # /proc/swaps からswap使用中のデバイスの祖先KNAME一覧 (自分自身+祖先) を
+    # 集める。swapエントリがパーティションやdevice mapper/LVM等の重なった
+    # デバイスであっても、Live起動元・/home提供元と同じ
+    # ancestor_knames_of_source による祖先追跡を使うことで、swap
+    # パーティションが載っている祖先whole diskまで一貫して除外対象にする。
+    # /proc/swapsの読み取り・awkによる列抽出・各swapエントリの祖先解決の
+    # いずれに失敗しても、swap使用中のディスクを見逃す危険があるため候補
+    # 一覧全体を空にする (fail-closed。以前あった「|| :」による読み取り
+    # 失敗の握り潰しは廃止した)。swapfile等、ブロックデバイスではなく
+    # 安全に親diskへ解決する手段がないswapエントリについても、
+    # ancestor_knames_of_sourceが失敗を返すため同様にfail-closedとなる
+    # (解析不能なswapエントリを黙って無視しない)。この段階ではsudo・
+    # helperを一切呼び出さない (読み取り専用の予備的な絞り込みに留める)。
+    if ! swap_content="$(cat /proc/swaps 2>/dev/null)"; then
+        CANDIDATES=''
+        return 0
+    fi
+    if ! swap_paths="$(printf '%s\n' "$swap_content" | awk 'NR>1 {print $1}')"; then
+        CANDIDATES=''
+        return 0
+    fi
+    swap_knames=''
+    if [ -n "$swap_paths" ]; then
+        swap_rc=0
+        swap_knames="$(printf '%s\n' "$swap_paths" | while IFS= read -r sp; do
+            [ -n "$sp" ] || continue
+            ancestor_knames_of_source "$sp" || exit 2
+        done)" || swap_rc=$?
+        if [ "$swap_rc" -ne 0 ]; then
+            CANDIDATES=''
+            return 0
+        fi
+    fi
+
+    # 各行を厳密に解析し、TYPE=disk の行だけを候補の母集団とする。
+    # 子パーティション有無・マウント有無・スワップ有無の判定のために、
+    # PKNAME (親disk) が一致する行もあわせて見る。
+    printf '%s\n' "$all_rows" | while IFS= read -r line; do
+        [ -n "$line" ] || continue
+
+        name_v="$(printf '%s\n' "$line" | extract_field NAME)" || continue
+        kname_v="$(printf '%s\n' "$line" | extract_field KNAME)" || continue
+        path_v="$(printf '%s\n' "$line" | extract_field PATH)" || continue
+        majmin_v="$(printf '%s\n' "$line" | extract_field 'MAJ:MIN')" || continue
+        type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || continue
+        size_v="$(printf '%s\n' "$line" | extract_field SIZE)" || continue
+        ro_v="$(printf '%s\n' "$line" | extract_field RO)" || continue
+        mp_v="$(printf '%s\n' "$line" | extract_field MOUNTPOINTS)" || continue
+        fstype_v="$(printf '%s\n' "$line" | extract_field FSTYPE)" || continue
+        pttype_v="$(printf '%s\n' "$line" | extract_field PTTYPE)" || continue
+        model_v="$(printf '%s\n' "$line" | extract_field MODEL)" || continue
+        serial_v="$(printf '%s\n' "$line" | extract_field SERIAL)" || continue
+        tran_v="$(printf '%s\n' "$line" | extract_field TRAN)" || continue
+
+        [ -n "$name_v" ] || continue
+        [ -n "$kname_v" ] || continue
+        [ -n "$path_v" ] || continue
+        [ -n "$majmin_v" ] || continue
+        [ -n "$type_v" ] || continue
+        [ -n "$size_v" ] || continue
+        [ -n "$ro_v" ] || continue
+
+        [ "$type_v" = 'disk' ] || continue
+
+        case "$kname_v" in
+            loop* | zram* | dm-*) continue ;;
+        esac
+
+        # 物理デバイスであることの根拠。
+        [ -e "/sys/block/$kname_v/device" ] || continue
+
+        [ "$ro_v" = '0' ] || continue
+
+        # パーティションテーブルが存在しないことを許可条件とする
+        # (PTTYPEが空、かつ自分自身を親とする子パーティション行がない)。
+        # 子パーティション行のPKNAME解析に失敗した場合も、子の有無を安全に
+        # 判定できないため、この候補を除外する (fail-closed)。
+        [ -z "$pttype_v" ] || continue
+        rc=0
+        printf '%s\n' "$all_rows" | while IFS= read -r cline; do
+            [ -n "$cline" ] || continue
+            cpk="$(printf '%s\n' "$cline" | extract_field PKNAME)" || exit 2
+            if [ "$cpk" = "$kname_v" ]; then
+                exit 1
+            fi
+        done || rc=$?
+        case "$rc" in
+            0) ;;
+            *) continue ;;
+        esac
+
+        # マウントなし (自分自身・子パーティションとも)。子パーティション
+        # 行のPKNAME/MOUNTPOINTS解析に失敗した場合も、マウント有無を安全に
+        # 判定できないため、この候補を除外する (fail-closed)。
+        [ -z "$mp_v" ] || continue
+        rc=0
+        printf '%s\n' "$all_rows" | while IFS= read -r cline; do
+            [ -n "$cline" ] || continue
+            cpk="$(printf '%s\n' "$cline" | extract_field PKNAME)" || exit 2
+            [ "$cpk" = "$kname_v" ] || continue
+            cmp="$(printf '%s\n' "$cline" | extract_field MOUNTPOINTS)" || exit 2
+            if [ -n "$cmp" ]; then
+                exit 1
+            fi
+        done || rc=$?
+        case "$rc" in
+            0) ;;
+            *) continue ;;
+        esac
+
+        # スワップでないこと (FSTYPE=swap、または/proc/swapsに現れるKNAME)。
+        [ "$fstype_v" != 'swap' ] || continue
+        if [ -n "$swap_knames" ] && printf '%s\n' "$swap_knames" | grep -Fxq -- "$kname_v"; then
+            continue
+        fi
+
+        # holdersが空であること (device mapper等の下位デバイスでない)。
+        # 実在するブロックデバイスであればholdersディレクトリは (中身が
+        # 空であっても) 必ず存在するため、ディレクトリが存在しない場合や
+        # 読み取りに失敗した場合は、安全に判定できないためこの候補を
+        # 除外する (fail-closed。以前の「存在しなければ素通り」「読み取り
+        # 失敗はholders_list=''扱い」は廃止した)。
+        holders_dir="/sys/class/block/$kname_v/holders"
+        [ -d "$holders_dir" ] || continue
+        holders_list="$(ls -A "$holders_dir" 2>/dev/null)" || continue
+        [ -z "$holders_list" ] || continue
+
+        # Live起動元・/home提供元のいずれの祖先diskとも一致しないこと。
+        if [ -n "$excluded_knames" ] && printf '%s\n' "$excluded_knames" | grep -Fxq -- "$kname_v"; then
+            continue
+        fi
+
+        display_path="$path_v"
+        display_size="$(format_size "$size_v")"
+        display_model="$(display_or_unknown "$model_v")"
+        display_serial="$(display_or_unknown "$serial_v")"
+        display_tran="$(display_or_unknown "$tran_v")"
+
+        # レコード区切りには実データに現れない制御文字 (0x01, 8進数
+        # エスケープ \001 で表す。dashの組み込みprintfは \xNN 形式の16進
+        # エスケープを解釈しないため、\NNN 形式の8進数エスケープを使う)
+        # を使う。
+        printf '%s\001%s\001%s\001%s\001%s\001%s\001%s\n' \
+            "$path_v" "$majmin_v" "$display_path" "$display_size" \
+            "$display_model" "$display_serial" "$display_tran"
+    done
+}
+
+# ---- 確認済みXDG_RUNTIME_DIR内に一時作業ディレクトリを作成 -----------------
+prepare_work_dir() {
+    WORK_DIR="$XDG_RUNTIME_DIR/mypocketos-persistence-setup.work.$$"
+    if ! mkdir "$WORK_DIR" 2>/dev/null; then
+        WORK_DIR=''
+        die_env '一時作業ディレクトリを作成できませんでした。'
+    fi
+}
+
+# ---- helperの終了コード -> 日本語メッセージ (README.md「helperの終了コード」節) --
+result_message_for() {
+    rc="$1"
+    detail="$2"
+    case "$rc" in
+        0)
+            printf '永続領域の作成に成功しました。\n次回起動時に「MyPocketOS Live (Persistence)」を選択すると有効になります。'
+            ;;
+        2)
+            printf '内部エラー: ヘルパーの引数が不正でした。'
+            ;;
+        10)
+            printf 'MyPocketOS Live環境ではないか、実行環境の検証に失敗しました。'
+            ;;
+        11)
+            printf '排他ロックを取得できませんでした。既に永続領域作成処理が実行中の可能性があります。'
+            ;;
+        12)
+            printf '対象デバイスが不正です (存在しない・ブロックデバイスではない・whole diskではない等)。'
+            ;;
+        13)
+            printf '対象デバイスの情報が変化したため中止しました (MAJOR:MINORの不一致)。'
+            ;;
+        14)
+            printf '対象ディスクが使用中のため中止しました (マウント・スワップ・Live起動元・/home提供元等)。'
+            ;;
+        15)
+            printf '対象ディスクが未使用ではないため中止しました (既存のパーティション・ファイルシステム等の署名を検出)。'
+            ;;
+        16)
+            printf '既存の永続領域 (LABEL/PARTLABEL=persistence) が検出されたため拒否されました。'
+            ;;
+        20)
+            printf 'GPTパーティションテーブルの作成に失敗しました。対象ディスクが途中状態になっている可能性があります。詳細を確認してください。'
+            ;;
+        21)
+            printf 'persistenceパーティションの作成・特定に失敗しました。\n対象ディスクが途中状態になっている可能性があります。'
+            ;;
+        22)
+            printf 'ext4ファイルシステムの作成に失敗しました。\n対象ディスクが途中状態になっている可能性があります。'
+            ;;
+        23)
+            printf '一時マウントの作成に失敗しました。\n対象ディスクが途中状態になっている可能性があります。'
+            ;;
+        24)
+            printf 'persistence.confの書き込みまたは内容確認に失敗しました。\n対象ディスクが途中状態になっている可能性があります。'
+            ;;
+        25)
+            printf 'syncまたはアンマウントに失敗しました。\n対象ディスクが途中状態になっている可能性があります。'
+            ;;
+        70)
+            printf '内部実行環境の不備 (必要なコマンドが見つからない等) により処理を継続できませんでした。'
+            ;;
+        71)
+            printf '未分類の内部エラーが発生しました。'
+            ;;
+        129 | 130 | 143)
+            printf '処理が中断されました。'
+            ;;
+        1)
+            printf 'sudo -n による特権昇格に失敗しました (パスワードが必要か、権限がありません)。'
+            ;;
+        *)
+            printf '未分類のエラーが発生しました (終了コード: %s)。' "$rc"
+            ;;
+    esac
+    if [ "$rc" -ne 0 ] && [ -n "$detail" ]; then
+        printf '\n\n詳細:\n%s' "$detail"
+    fi
+}
+
+# ---- helperの呼び出し (確認完了後、1回だけ) --------------------------------
+# ヘルパーはバックグラウンド実行してPIDを保持し、waitで正確な終了コードを
+# 取得する。単純な `helper | yad --progress` のパイプは使わない (標準出力・
+# 標準エラーは通常ファイルへリダイレクトするだけであり、ヘルパー自身の
+# パイプラインには一切関与しない)。進捗ダイアログはヘルパーとは独立した
+# 別プロセスであり、ヘルパー開始後にユーザーが進捗ダイアログを閉じても、
+# ヘルパー自身を強制終了することはない。
+run_helper() {
+    device="$1"
+    majmin="$2"
+
+    # helper起動直前の保留シグナルを反映する。ここではまだ進捗ダイアログも
+    # helperも何も開始していないため、通常のEXIT trap (cleanup) だけで
+    # 安全に後始末できる。
+    check_signal
+
+    prepare_work_dir
+    stdout_file="$WORK_DIR/helper.stdout"
+    stderr_file="$WORK_DIR/helper.stderr"
+    : > "$stdout_file"
+    : > "$stderr_file"
+
+    # helperの標準出力は、進捗段階の診断情報として "$stdout_file" へ保存
+    # するだけであり、GUI側で解析・表示することはしない (v1では固定文言の
+    # pulsate表示のみを行う)。標準エラーは失敗時の補足表示にのみ用い、
+    # いずれの内容もコマンドとして解釈・実行しない。
+    yad --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+        --width=420 --text="永続領域を作成しています。しばらくお待ちください…" \
+        --progress --pulsate --no-buttons >/dev/null 2>&1 &
+    PROGRESS_PID=$!
+
+    # 進捗ダイアログ起動後・helper起動直前にも再確認する (defense-in-depth)。
+    # ここで保留シグナルによりexitする場合、cleanupが進捗ダイアログを
+    # 終了させる。
+    check_signal
+
+    sudo -n -- "$HELPER" create "$device" "$majmin" \
+        >"$stdout_file" 2>"$stderr_file" &
+    helper_pid=$!
+
+    # helperの終了を待つ (進捗ダイアログの状態には一切左右されない)。
+    # GUI自身がHUP/INT/TERMを受けると、trap設定によりwaitがそのシグナルの
+    # 終了コード (128+N) で即座に返ることがあるが、それはhelperの実際の
+    # 終了ではない。kill -0で helper_pid がまだ存在するかを確認し、存在
+    # するなら実際に終了するまでwaitをやり直す (シグナルをhelperの終了
+    # コードと誤認しない。helperは一度も強制終了しない)。
+    # 注意: "if wait ...; then ...; fi" のようにelseを省略した形にすると、
+    # 条件が偽の場合のif全体の終了ステータスはPOSIX上0になり (then節が
+    # 実行されなかった場合の規定)、waitの実際の終了コードを直後の"$?"で
+    # 取り違えてしまう。そのため"&&"/"||"でwait自身の終了コードを直接rcへ
+    # 捕捉する。
+    helper_rc=''
+    while :; do
+        wait "$helper_pid" && rc=0 || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            helper_rc=0
+            break
+        fi
+        if kill -0 "$helper_pid" 2>/dev/null; then
+            continue
+        fi
+        helper_rc="$rc"
+        break
+    done
+
+    # 進捗ダイアログは、ここで初めて (helperの結果が確定した後に) 閉じる。
+    # helper自身には一切干渉しない。
+    if [ -n "$PROGRESS_PID" ]; then
+        kill "$PROGRESS_PID" 2>/dev/null || :
+        wait "$PROGRESS_PID" 2>/dev/null || :
+        PROGRESS_PID=''
+    fi
+
+    # 表示量を制限しつつ (最大20行・2000文字)、主要なエラー内容を失わない
+    # 範囲でstderrの末尾を補足情報として表示する。
+    detail="$(tail -n 20 -- "$stderr_file" 2>/dev/null)" || detail=''
+    detail="$(printf '%s' "$detail" | cut -c1-2000)" || detail=''
+    message="$(result_message_for "$helper_rc" "$detail")"
+    notice "$message" || :
+
+    # 結果表示後に保留シグナルがあれば、ここで初めてそのシグナルの終了
+    # コードで終了する (helperの結果は既に表示済み)。
+    check_signal
+}
+
+# ---- メイン処理 -------------------------------------------------------------
+
+check_live_env
+check_runtime_dir
+acquire_gui_lock
+check_signal
+
+CANDIDATES="$(build_candidates)"
+
+if [ -z "$CANDIDATES" ]; then
+    notice '対象デバイスが見つかりません。' || :
+    exit 0
+fi
+
+# yadの--listへ渡す平坦化データ (表示列: パス・サイズ・モデル・
+# シリアル番号・接続方式) を、CANDIDATESの各レコード (\001区切り、
+# 1レコード=1行) からフィールド3〜7を取り出して組み立てる。
+yad_data="$(printf '%s\n' "$CANDIDATES" | awk -F'\001' '{
+    print $3; print $4; print $5; print $6; print $7
+}')"
+
+# set -eu 下では、この代入文自体がパイプライン (yad) の非0終了で
+# 即座にスクリプトを終了させてしまう (yadのキャンセルは非0終了のため)。
+# "|| selected_rc=$?" で明示的に捕捉し、キャンセルを正常な分岐として
+# 扱えるようにする。
+selected_rc=0
+selected="$(printf '%s' "$yad_data" | yad --list --separator='\001' \
+    --title="MyPocketOS" --center --on-top --skip-taskbar \
+    --width=640 --height=320 \
+    --text="永続領域を作成するデバイスを選択してください。\nこの一覧に表示されたこと自体は安全性の保証ではありません。実際の安全確認は確認後にヘルパーが行います。" \
+    --column="パス" --column="サイズ" --column="モデル" --column="シリアル番号" --column="接続方式" \
+    --button="キャンセル:1" --button="次へ:0")" || selected_rc=$?
+
+if [ "$selected_rc" -ne 0 ]; then
+    exit 0
+fi
+
+selected_path="$(printf '%s' "$selected" | awk -F'\001' '{print $1}')"
+
+if [ -z "$selected_path" ]; then
+    notice '選択内容を取得できませんでした。' || :
+    exit 1
+fi
+
+# 選択されたパスに対応するMAJOR:MINORを、候補一覧生成時に取得した値
+# (CANDIDATESのフィールド1=PATH, フィールド2=MAJ:MIN) から引く
+# (yadの表示列には含めていない内部値)。
+device_majmin="$(printf '%s\n' "$CANDIDATES" | awk -F'\001' -v want="$selected_path" '
+    $1 == want { print $2; exit }
+')"
+
+if [ -z "$device_majmin" ]; then
+    notice '対象デバイスのMAJOR:MINORを取得できませんでした。' || :
+    exit 1
+fi
+
+# ---- 警告 + type-to-confirm (取り消し可能なのはここまで) -------------------
+confirm_word="ERASE $selected_path"
+warning_text="$(printf '警告: この操作でデバイスの全内容が失われます。\n対象: %s\nこの操作は取り消せません。\n続行するには、下の欄に次の文字列を正確に入力してください:\n%s' \
+    "$selected_path" "$confirm_word")"
+
+# 同様に、set -eu 下でのキャンセル (yadの非0終了) による即時終了を避ける。
+entry_rc=0
+entry_result="$(yad --entry --title="MyPocketOS" --center --on-top --skip-taskbar \
+    --width=480 --text="$warning_text" \
+    --button="キャンセル:1" --button="OK:0")" || entry_rc=$?
+
+if [ "$entry_rc" -ne 0 ]; then
+    exit 0
+fi
+
+if [ "$entry_result" != "$confirm_word" ]; then
+    notice '確認文字列が一致しなかったため中止しました。' || :
+    exit 0
+fi
+
+# ---- ここから先はキャンセルしない (README.md「GUI操作フロー」5.) ----------
+run_helper "$selected_path" "$device_majmin"
