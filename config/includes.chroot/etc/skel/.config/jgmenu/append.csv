@@ -4,7 +4,11 @@
 # その内容を生成した CSV の末尾に付加する。
 # フィールド・書式は jgmenu(1) の Fields / Markup を参照。
 # 電源操作は systemctl 等を直接書かず、mypocketos-power へ委譲する。
+# 永続領域作成も同様に、特権昇格や特権ヘルパーを直接書かず、確認・検証を
+# まとめた一般ユーザー権限のGUI本体 mypocketos-persistence-setup へ委譲する。
 # (実際に jgmenu-apps で生成し、この内容が末尾に含まれることを確認済み)
+
+永続領域を作成,mypocketos-persistence-setup
 
 ^sep()
 電源・セッション,^checkout(power)
