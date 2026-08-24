@@ -1,0 +1,1032 @@
+#!/bin/sh
+#
+# mypocketos-persistence-setup-helper - MyPocketOS 永続領域作成の特権ヘルパー
+#
+# README.md の「GUIによる永続領域作成 (設計)」節に基づく実装。
+# GUI本体 (mypocketos-persistence-setup、未実装) から
+#   sudo -n -- mypocketos-persistence-setup-helper create DEVICE MAJOR:MINOR
+# の形で1回だけ呼び出されることを前提とする。sudoはGUI側が使うものであり、
+# 本スクリプト自身はsudoを実行しない (常にroot権限で起動される前提)。
+#
+# 設計方針 (README.md 該当節を参照):
+# - GUI側の判定は「予備的な絞り込み」に過ぎない。破壊的操作
+#   (parted/mkfs) の直前に、本スクリプト自身が全条件を読み取り専用の
+#   手段で再検証する。1つでも満たさなければ、対象デバイスに一切変更を
+#   加えず拒否する。lock取得後・final_verification直後・mkfs直前の
+#   3箇所で、DEVICEの状態 (PATH/block device/symlink/TYPE/KNAME/RO/
+#   MAJOR:MINOR) をもう一度再検証する (reverify_device、TOCTOU窓の
+#   縮小)。新規作成したパーティション自身にも、mkfsの直前に
+#   wipefs -n による署名検査を行う (check_created_partition_no_signature)。
+#   lsblk -P の解析 (extract_field) は、フィールドキー自体が行中に
+#   存在しない場合を解析失敗として区別し、fail-closedとする
+#   (FIELD="" のように値が空であること自体は正常なケースがあるため、
+#   「値が空」と「フィールド欠落」は区別する)。
+# - 引数は create DEVICE MAJOR:MINOR の3個に固定する。eval は使用しない。
+#   外部入力からコマンド文字列を組み立てることはしない。
+# - 固定した安全なPATHを設定したうえで、使用する全コマンドは絶対パス
+#   (CMD_* 変数) で呼び出す (二重の対策)。破壊的操作の前に、これら全ての
+#   実在・実行可能性を check_required_commands() で確認する。
+# - シグナル (HUP/INT/TERM) は即座に exit せず、いったんフラグに記録する
+#   (on_hup/on_int/on_term は SIGNAL_PENDING を設定するだけ)。ロック取得・
+#   一時ディレクトリ作成・mount・umount のように「操作成功」と「状態変数
+#   更新」の間にわずかな競合窓がある箇所では、状態変数を更新した直後に
+#   check_signal で保留中のシグナルを処理する。これにより、シグナルが
+#   その競合窓の中で届いた場合でも、状態変数は必ず現実と一致した状態で
+#   後始末 (on_exit) に入る。
+# - on_exit (EXITトラップ) は MOUNTED フラグだけを信用せず、MNT_DIR が
+#   設定されていれば findmnt --mountpoint で実際のマウント状態も確認する。
+#   後始末 (一時ディレクトリ・ロックディレクトリのrmdir) 自体が失敗した
+#   場合、元の終了コードが0 (本来成功予定) であればその成功を取り消して
+#   71へ正規化する。元の終了コードが既に非0の場合はその主要な終了コード
+#   を維持し、cleanup失敗は追加の警告としてのみ表示する (cleanup失敗を
+#   成功扱いしない)。
+# - 終了コードはREADME.mdの「helperの終了コード」節の定義に厳密に従う。
+#   既知の終了コード以外で終了しようとした場合は、その旨を標準エラーへ
+#   追加したうえで exit 71 (未分類の内部エラー) へ正規化する。
+#
+set -eu
+umask 077
+
+PROG_NAME='mypocketos-persistence-setup-helper'
+
+PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+
+# ---- 使用する全コマンドの絶対パス ------------------------------------------
+# Debian trixie (merged-usr、/bin は /usr/bin へのシンボリックリンク) の
+# 標準配置に基づく。PATHを固定したうえで、さらに絶対パスでも呼び出すことで
+# 二重に対策する。awk/grep/ls も含め、直接呼び出す全コマンドをここに
+# 列挙し、check_required_commands() で実在・実行可能性を確認する。
+CMD_LSBLK=/usr/bin/lsblk
+CMD_FINDMNT=/usr/bin/findmnt
+CMD_WIPEFS=/usr/sbin/wipefs
+CMD_PARTED=/usr/sbin/parted
+CMD_PARTPROBE=/usr/sbin/partprobe
+CMD_UDEVADM=/usr/bin/udevadm
+CMD_MKFS_EXT4=/usr/sbin/mkfs.ext4
+CMD_MOUNT=/usr/bin/mount
+CMD_UMOUNT=/usr/bin/umount
+CMD_MKTEMP=/usr/bin/mktemp
+CMD_STAT=/usr/bin/stat
+CMD_ID=/usr/bin/id
+CMD_CAT=/usr/bin/cat
+CMD_SYNC=/usr/bin/sync
+CMD_MKDIR=/usr/bin/mkdir
+CMD_RMDIR=/usr/bin/rmdir
+CMD_AWK=/usr/bin/awk
+CMD_GREP=/usr/bin/grep
+CMD_LS=/usr/bin/ls
+
+LOCK_DIR='/run/lock/mypocketos-persistence-setup-helper.lock'
+
+# ---- 状態フラグ (trapによる後始末で参照する) ------------------------------
+LOCK_ACQUIRED=0
+MOUNTED=0
+MNT_DIR=''
+CLEANUP_DONE=0
+SIGNAL_PENDING=''
+
+# ---- 共通ユーティリティ ---------------------------------------------------
+usage() {
+    printf 'usage: %s create DEVICE MAJOR:MINOR\n' "$PROG_NAME" >&2
+    exit 2
+}
+
+# 日本語の詳細エラーを標準エラーへ出し、指定した終了コードで終了する。
+# ここでの exit は、下記 on_exit (EXITトラップ) を経由して後始末される。
+fail() {
+    code="$1"
+    shift
+    printf '%s: %s\n' "$PROG_NAME" "$*" >&2
+    exit "$code"
+}
+
+# 標準出力には、将来GUIが進捗表示に使える簡潔な段階名だけを出す。
+# (助言・詳細説明は標準エラー側にのみ書く)
+stage() {
+    printf '%s\n' "$1"
+}
+
+# ---- シグナル (保留・遅延処理方式) -----------------------------------------
+# HUP/INT/TERM を受け取っても、トラップハンドラ自身は SIGNAL_PENDING に
+# 終了コードを記録するだけで、その場では exit しない。ロック取得・一時
+# ディレクトリ作成・mount/umount のように「操作の成功」と「状態変数の
+# 更新」の間にわずかな間隙がある箇所では、状態変数を更新した直後に
+# check_signal を呼び、そこで初めて保留中のシグナルを処理する。
+#
+# POSIX shでの安全性: シェルはトラップハンドラの実行を、割り込まれた
+# 単純コマンドの「次のコマンド」が始まる前に完了させる (トラップの実行と
+# 隣接するコマンドの実行順序はシェルによって直列化される)。ハンドラの
+# 中身は変数代入 (シェル組み込み) だけであり、fork/execを伴わないため、
+# ハンドラ自体が競合窓を生む余地がない。したがって、状態変数の更新
+# ("LOCK_ACQUIRED=1" 等) の直後で明示的に check_signal を呼ぶことで、
+# シグナルがその competition window の中で届いた場合でも、on_exit に
+# 入る時点では状態変数が必ず現実と一致していることが保証される。
+on_hup()  { SIGNAL_PENDING=129; }
+on_int()  { SIGNAL_PENDING=130; }
+on_term() { SIGNAL_PENDING=143; }
+
+check_signal() {
+    if [ -n "$SIGNAL_PENDING" ]; then
+        exit "$SIGNAL_PENDING"
+    fi
+}
+
+# ---- 後始末 (trap) --------------------------------------------------------
+on_exit() {
+    ec=$?
+
+    # 再入防止: 何らかの理由でEXITトラップが複数回走っても後始末は1回だけ。
+    if [ "$CLEANUP_DONE" -eq 1 ]; then
+        return
+    fi
+    CLEANUP_DONE=1
+
+    # 実際にマウントされているかどうかを MOUNTED フラグだけに頼らず、
+    # findmnt --mountpoint で改めて確認する。フラグ更新前後のわずかな
+    # 競合窓が万一残っていた場合でも、安全側 (umountを試みる側) に倒す。
+    # findmnt --target は指定パス配下を提供しているファイルシステムを
+    # 返してしまう (指定パス自体がマウントポイントとは限らない) ため
+    # ここでは使わず、指定パス自体がマウントポイントであることを厳密に
+    # 確認する --mountpoint を使う。
+    need_umount=0
+    if [ -n "$MNT_DIR" ]; then
+        if "$CMD_FINDMNT" -rn --mountpoint "$MNT_DIR" >/dev/null 2>&1; then
+            need_umount=1
+        elif [ "$MOUNTED" -eq 1 ]; then
+            need_umount=1
+        fi
+    fi
+
+    if [ "$need_umount" -eq 1 ]; then
+        if "$CMD_UMOUNT" -- "$MNT_DIR" 2>&2; then
+            MOUNTED=0
+        else
+            printf '%s: 後始末に失敗しました (%s のアンマウントに失敗)。\n' \
+                "$PROG_NAME" "$MNT_DIR" >&2
+            # 本来成功予定 (終了コード0) だった場合のみ、この後始末失敗を
+            # 終了コードへ反映する。既に失敗している場合は、元の失敗内容を
+            # 優先し、上書きしない (後始末失敗を追加で報告するに留める)。
+            if [ "$ec" -eq 0 ]; then
+                ec=25
+            fi
+        fi
+    fi
+
+    # 自身が作成した一時ディレクトリだけを削除する (他の一時ディレクトリ
+    # には一切干渉しない)。rmdirに失敗した場合、元の終了コードが0
+    # (本来成功予定) であれば、その成功を取り消して71 (未分類の内部
+    # エラー) へ正規化する。元の終了コードが既に非0の場合は、その主要な
+    # 終了コードを維持し、cleanup失敗は追加の警告としてのみ表示する。
+    if [ -n "$MNT_DIR" ] && [ "$MOUNTED" -eq 0 ] && [ -d "$MNT_DIR" ]; then
+        if ! "$CMD_RMDIR" -- "$MNT_DIR" 2>&2; then
+            printf '%s: 後始末に失敗しました (一時ディレクトリ %s の削除に失敗)。\n' \
+                "$PROG_NAME" "$MNT_DIR" >&2
+            if [ "$ec" -eq 0 ]; then
+                ec=71
+            fi
+        fi
+    fi
+
+    # 自身が作成したロックディレクトリだけを削除する。他プロセスが作成
+    # したロックには一切干渉しない (このプロセスが acquire_lock() で
+    # 実際にmkdirへ成功した場合のみ LOCK_ACQUIRED=1 になっている)。
+    # 既存ロックを削除する方針への変更はしない (自身のロックのみ対象)。
+    if [ "$LOCK_ACQUIRED" -eq 1 ]; then
+        if ! "$CMD_RMDIR" -- "$LOCK_DIR" 2>&2; then
+            printf '%s: 後始末に失敗しました (ロックディレクトリ %s の削除に失敗)。\n' \
+                "$PROG_NAME" "$LOCK_DIR" >&2
+            if [ "$ec" -eq 0 ]; then
+                ec=71
+            fi
+        fi
+    fi
+
+    # 既知の終了コード以外で終了しようとした場合は、未分類の内部エラー
+    # として exit 71 へ正規化する。元のエラー情報 (fail() 等が既に標準
+    # エラーへ出力済みのメッセージ) は消さず、追加の1行を出すだけにする。
+    # 71 (未分類の内部エラー) 自体も既知の終了コードとして含める。
+    # cleanup失敗 (上記のMNT_DIR/LOCK_DIRのrmdir失敗) によって意図的に
+    # ec=71へ変更した場合、その理由は既に上のprintfで報告済みであり、
+    # ここで「未分類」として再度報告しない (二重報告の防止)。
+    case " $ec " in
+        ' 0 ' | ' 2 ' | ' 10 ' | ' 11 ' | ' 12 ' | ' 13 ' | ' 14 ' | ' 15 ' | ' 16 ' | \
+        ' 20 ' | ' 21 ' | ' 22 ' | ' 23 ' | ' 24 ' | ' 25 ' | ' 70 ' | ' 71 ' | \
+        ' 129 ' | ' 130 ' | ' 143 ')
+            ;;
+        *)
+            printf '%s: 未分類の内部エラーです (元の終了コード: %s)。exit 71へ正規化します。\n' \
+                "$PROG_NAME" "$ec" >&2
+            ec=71
+            ;;
+    esac
+
+    exit "$ec"
+}
+trap on_exit EXIT
+trap on_hup HUP
+trap on_int INT
+trap on_term TERM
+
+# ---- 引数解析 (create DEVICE MAJOR:MINOR の3個のみを受け付ける) -----------
+if [ "$#" -ne 3 ]; then
+    usage
+fi
+OP="$1"
+DEVICE_ARG="$2"
+MAJMIN_ARG="$3"
+
+if [ "$OP" != 'create' ]; then
+    usage
+fi
+
+# ---- 使用コマンドの実在・実行可能性の確認 (終了コード70) -------------------
+# 破壊的操作より前に、直接呼び出す全コマンド (CMD_* の全て) が実在し
+# 実行可能であることを確認する。1つでも欠けていれば、その時点で拒否する。
+check_required_commands() {
+    for cmd in \
+        "$CMD_LSBLK" "$CMD_FINDMNT" "$CMD_WIPEFS" "$CMD_PARTED" "$CMD_PARTPROBE" \
+        "$CMD_UDEVADM" "$CMD_MKFS_EXT4" "$CMD_MOUNT" "$CMD_UMOUNT" "$CMD_MKTEMP" \
+        "$CMD_STAT" "$CMD_ID" "$CMD_CAT" "$CMD_SYNC" "$CMD_MKDIR" "$CMD_RMDIR" \
+        "$CMD_AWK" "$CMD_GREP" "$CMD_LS"
+    do
+        if [ ! -x "$cmd" ]; then
+            fail 70 "必要なコマンドが見つからないか実行できません: $cmd"
+        fi
+    done
+}
+
+# ---- root確認 (終了コード10) ----------------------------------------------
+check_root() {
+    uid="$("$CMD_ID" -u 2>/dev/null)" || uid=''
+    if [ "$uid" != '0' ]; then
+        fail 10 'root権限で実行される必要があります。'
+    fi
+}
+
+# ---- MyPocketOS Live環境の確認 (終了コード10) ------------------------------
+# /proc/cmdline は空白区切りでトークン化し、トークン全体が boot=live と
+# 一致することを確認する (他パラメータの一部分に文字列として含まれるだけの
+# 誤検知を避けるため、部分一致では判定しない)。
+check_live_env() {
+    cmdline="$("$CMD_CAT" /proc/cmdline 2>/dev/null)" || cmdline=''
+    found=0
+    for tok in $cmdline; do
+        if [ "$tok" = 'boot=live' ]; then
+            found=1
+            break
+        fi
+    done
+    if [ "$found" -ne 1 ]; then
+        fail 10 'MyPocketOS Live環境 (カーネルコマンドラインのboot=live) を検出できませんでした。'
+    fi
+
+    if ! "$CMD_FINDMNT" -rn --mountpoint /run/live/medium >/dev/null 2>&1; then
+        fail 10 '/run/live/medium がマウントされていません。'
+    fi
+}
+
+# ---- DEVICE引数の構造検証 (終了コード12) -----------------------------------
+# 成功時は DEVICE / DEVICE_KNAME を設定する。
+validate_device_arg() {
+    device="$1"
+
+    case "$device" in
+        /dev/*) ;;
+        *)
+            fail 12 "DEVICEは/dev以下の絶対パスで指定してください: $device"
+            ;;
+    esac
+
+    # /dev 直下のパスであることを確認する (/dev/foo/bar のような
+    # ネストしたパスは拒否する)。外部コマンド (basename等) を使わず、
+    # シェルのパラメータ展開だけで判定する。
+    parent="${device%/*}"
+    if [ "$parent" != '/dev' ]; then
+        fail 12 "DEVICEは/dev直下のパスである必要があります: $device"
+    fi
+
+    if [ -L "$device" ]; then
+        fail 12 "DEVICEはシンボリックリンクのため使用できません: $device"
+    fi
+
+    if [ ! -e "$device" ]; then
+        fail 12 "DEVICEが存在しません: $device"
+    fi
+
+    if [ ! -b "$device" ]; then
+        fail 12 "DEVICEはブロックデバイスではありません: $device"
+    fi
+
+    lsblk_path="$("$CMD_LSBLK" -dn -o PATH -- "$device" 2>/dev/null)" || lsblk_path=''
+    if [ -z "$lsblk_path" ] || [ "$lsblk_path" != "$device" ]; then
+        fail 12 "lsblkが報告するPATHがDEVICEと一致しません: $device"
+    fi
+
+    kname="$("$CMD_LSBLK" -dn -o KNAME -- "$device" 2>/dev/null)" || kname=''
+    if [ -z "$kname" ]; then
+        fail 12 "DEVICEのKNAMEを取得できません: $device"
+    fi
+
+    dtype="$("$CMD_LSBLK" -dn -o TYPE -- "$device" 2>/dev/null)" || dtype=''
+    if [ "$dtype" != 'disk' ]; then
+        fail 12 "DEVICEはwhole disk (TYPE=disk) ではありません: $device"
+    fi
+
+    # TYPE=disk であること単体を安全の根拠にはしない。loop/zram/dm等の
+    # 仮想ブロックデバイスをデバイス名パターンでも除外する。
+    case "$kname" in
+        loop* | zram* | dm-*)
+            fail 12 "DEVICEは仮想ブロックデバイスのため使用できません: $device"
+            ;;
+    esac
+
+    # 物理デバイスであることの根拠として、/sys/class/block/<kname>/device
+    # (物理デバイスへのシンボリックリンク) の存在を確認する。
+    if [ ! -e "/sys/class/block/$kname/device" ]; then
+        fail 12 "DEVICEを物理デバイスとして確認できません (/sys/class/block/$kname/device が存在しません): $device"
+    fi
+
+    ro="$("$CMD_LSBLK" -dn -o RO -- "$device" 2>/dev/null)" || ro=''
+    if [ "$ro" != '0' ]; then
+        fail 12 "DEVICEは読み取り専用です: $device"
+    fi
+
+    DEVICE="$device"
+    DEVICE_KNAME="$kname"
+}
+
+# ---- MAJOR:MINORの一致確認 (終了コード13) ----------------------------------
+# GUI側・ヘルパー側の双方で同じ取得方法 (lsblk -dn -o MAJ:MIN) を用い、
+# 文字列として厳密に比較する (statの書式とは混在させない)。
+validate_majmin() {
+    given="$1"
+    current="$("$CMD_LSBLK" -dn -o MAJ:MIN -- "$DEVICE" 2>/dev/null)" || current=''
+    if [ -z "$current" ] || [ "$current" != "$given" ]; then
+        fail 13 "指定されたMAJOR:MINOR ($given) が現在の値 (${current:-取得不可}) と一致しません: $DEVICE"
+    fi
+}
+
+# ---- root側の排他ロック (終了コード11) -------------------------------------
+# mypocketos-power と同じ mkdir による排他的作成方式。flockは用いない。
+# 既にロックが存在する場合、それを削除・上書きすることは一切せず、
+# 何もせず失敗として終了する。
+acquire_lock() {
+    if ! "$CMD_MKDIR" -- "$LOCK_DIR" 2>/dev/null; then
+        fail 11 "排他ロックを取得できませんでした (既に処理が実行中の可能性があります): $LOCK_DIR"
+    fi
+    LOCK_ACQUIRED=1
+    check_signal
+}
+
+# ---- lock取得後のDEVICE再検証 (終了コード12/13) ----------------------------
+# validate_device_arg / validate_majmin と lock取得の間、および lock取得
+# から本チェックまでの間に状態が変化している可能性を前提に、破壊的操作へ
+# 進む前段階として、対象デバイスの基本属性をもう一度読み取り専用の手段で
+# 再確認する。GUI側の判定はもちろん、本ヘルパー自身の初回検証結果も
+# 無条件には信用しない。
+reverify_device() {
+    if [ -L "$DEVICE" ]; then
+        fail 12 "再検証: DEVICEはシンボリックリンクになっています: $DEVICE"
+    fi
+    if [ ! -e "$DEVICE" ]; then
+        fail 12 "再検証: DEVICEが存在しません: $DEVICE"
+    fi
+    if [ ! -b "$DEVICE" ]; then
+        fail 12 "再検証: DEVICEはブロックデバイスではなくなっています: $DEVICE"
+    fi
+
+    path_now="$("$CMD_LSBLK" -dn -o PATH -- "$DEVICE" 2>/dev/null)" || path_now=''
+    if [ "$path_now" != "$DEVICE" ]; then
+        fail 12 "再検証: lsblkが報告するPATHがDEVICEと一致しません: $DEVICE"
+    fi
+
+    type_now="$("$CMD_LSBLK" -dn -o TYPE -- "$DEVICE" 2>/dev/null)" || type_now=''
+    if [ "$type_now" != 'disk' ]; then
+        fail 12 "再検証: DEVICEはwhole disk (TYPE=disk) ではなくなっています: $DEVICE"
+    fi
+
+    kname_now="$("$CMD_LSBLK" -dn -o KNAME -- "$DEVICE" 2>/dev/null)" || kname_now=''
+    if [ -z "$kname_now" ] || [ "$kname_now" != "$DEVICE_KNAME" ]; then
+        fail 12 "再検証: DEVICEのKNAMEが初回検証時と一致しません: $DEVICE"
+    fi
+
+    ro_now="$("$CMD_LSBLK" -dn -o RO -- "$DEVICE" 2>/dev/null)" || ro_now=''
+    if [ "$ro_now" != '0' ]; then
+        fail 12 "再検証: DEVICEは読み取り専用になっています: $DEVICE"
+    fi
+
+    majmin_now="$("$CMD_LSBLK" -dn -o MAJ:MIN -- "$DEVICE" 2>/dev/null)" || majmin_now=''
+    if [ -z "$majmin_now" ] || [ "$majmin_now" != "$MAJMIN_ARG" ]; then
+        fail 13 "再検証: MAJOR:MINORが初回検証時と一致しません: $DEVICE"
+    fi
+}
+
+# ---- 破壊的操作前の最終検証 (終了コード14/15/16) ---------------------------
+# GUI側の予備的除外の結果は一切信用せず、ここで全条件を自分自身で
+# 再取得・再検証する。1つでも満たさなければ、対象デバイスに一切変更を
+# 加えず拒否する。検証情報自体が取得できない場合も、許可はせず安全側に
+# 倒す (以下の各チェックはコマンド失敗時にすべて「安全でない」側へ倒す)。
+
+# 対象disk自身とその子パーティションのpairs出力をまとめて1回だけ取得する。
+# デバイスを指定したlsblkは、そのデバイスと配下の子パーティションを
+# まとめて返す (システム全体を走査してPKNAMEで手動フィルタする必要がない)。
+fetch_disk_rows() {
+    DISK_ROWS="$("$CMD_LSBLK" -b -P -o NAME,TYPE,MOUNTPOINTS -- "$DEVICE" 2>/dev/null)" || DISK_ROWS=''
+    if [ -z "$DISK_ROWS" ]; then
+        fail 14 "対象ディスクの情報を取得できませんでした (安全側として拒否します): $DEVICE"
+    fi
+
+    # 全行についてNAME/TYPE/MOUNTPOINTSのフィールドが解析できることを
+    # 確認する。NAME/TYPEは値が空であること自体を拒否する (対象disk・
+    # 子パーティションには必ず非空の名前・種別があるはずのため)。
+    # MOUNTPOINTS=""のみ正常な値として許可する。1行でも条件を満たさなけ
+    # れば安全側に倒して拒否する。
+    printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
+        name_v="$(printf '%s\n' "$line" | extract_field NAME)" || exit 1
+        type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || exit 1
+        printf '%s\n' "$line" | extract_field MOUNTPOINTS >/dev/null || exit 1
+        [ -n "$name_v" ] || exit 1
+        [ -n "$type_v" ] || exit 1
+    done || fail 14 "対象ディスク情報の一部フィールド (NAME/TYPE/MOUNTPOINTS) を解析できないか、NAME/TYPEが空でした (安全側として拒否します): $DEVICE"
+}
+
+extract_field() {
+    # 標準入力の1行 (lsblk -P形式) を厳密なトークン列として解析し、指定
+    # フィールドの値を取り出す。行全体が空白1個区切りの FIELD="value"
+    # トークンだけで過不足なく構成されていること、かつ指定フィールドが
+    # 重複なく厳密に1回だけ出現することを要求する。次のいずれかに該当
+    # する場合は解析失敗 (非0) として扱う。
+    #   - 開始引用符はあるが閉じ引用符がない (行末まで未終端)
+    #   - 閉じ引用符の直後に空白でも行末でもない文字が続く
+    #   - フィールド名が英数字・アンダースコア・コロン以外を含む、
+    #     または部分一致 (XNAME を NAME として扱う等) している
+    #   - 同じフィールド名が行中に複数回出現する
+    # FIELD="" のように値が空で存在する場合は正常な成功として扱う
+    # (MOUNTPOINTS/LABEL/PARTLABEL等では空値が正常なケースであるため)。
+    # 値中の \xNN エスケープ (lsblk -P が埋め込み引用符・バックスラッシュ
+    # をエスケープする書式) は解釈・デコードせず、そのまま保持して返す。
+    field="$1"
+    input="$("$CMD_CAT")" || return 1
+    printf '%s\n' "$input" | "$CMD_AWK" -v field="$field" '
+{
+    line = $0
+    n = length(line)
+    i = 1
+    ok = 1
+    delete seen
+    found = 0
+    foundval = ""
+    while (i <= n) {
+        if (i > 1) {
+            if (substr(line, i, 1) != " ") { ok = 0; break }
+            i++
+        }
+        keystart = i
+        while (i <= n && substr(line, i, 1) != "=") i++
+        if (i > n) { ok = 0; break }
+        key = substr(line, keystart, i - keystart)
+        if (key == "" || key !~ /^[A-Za-z0-9_:]+$/) { ok = 0; break }
+        i++
+        if (i > n || substr(line, i, 1) != "\"") { ok = 0; break }
+        i++
+        valstart = i
+        while (i <= n && substr(line, i, 1) != "\"") i++
+        if (i > n) { ok = 0; break }
+        val = substr(line, valstart, i - valstart)
+        i++
+        if (key in seen) { ok = 0; break }
+        seen[key] = 1
+        if (key == field) { found = 1; foundval = val }
+    }
+    if (!ok) { exit 1 }
+    if (!found) { exit 1 }
+    printf "%s", foundval
+    exit 0
+}
+'
+}
+
+# 対象diskおよび子デバイスにmountがないこと (終了コード14)
+# MOUNTPOINTSフィールド自体が欠落している行があれば、解析失敗として
+# 安全側 (使用中扱い) に倒す。
+check_not_mounted() {
+    printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
+        mp="$(printf '%s\n' "$line" | extract_field MOUNTPOINTS)" || exit 1
+        if [ -n "$mp" ]; then
+            exit 1
+        fi
+    done
+}
+
+# 対象diskおよび子デバイスが/proc/swapsにないこと (終了コード14)
+# /proc/swapsの読み取り自体に失敗した場合、および常に存在するはずの
+# ヘッダー行すら取得できない (真に空の) 場合は、「スワップなし」と誤認
+# せず安全側 (拒否) に倒す。DISK_ROWSからNAME (対象disk自身+子パーティ
+# ション) の一覧をまず作り、各swapエントリの解決先KNAMEがその一覧に
+# 含まれるかを grep -Fx (完全一致) で判定する。zram等、対象ディスクと
+# 無関係な解決可能swapはこの一覧に含まれないため通過する。
+check_not_swap() {
+    target_knames="$(printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
+        name_v="$(printf '%s\n' "$line" | extract_field NAME)" || exit 1
+        [ -n "$name_v" ] || exit 1
+        printf '%s\n' "$name_v"
+    done)" || fail 14 "対象ディスク情報 (NAME) の解析に失敗したか、NAMEが空でした (安全側として拒否します): $DEVICE"
+
+    if ! swaps="$("$CMD_CAT" /proc/swaps 2>/dev/null)"; then
+        fail 14 "/proc/swapsの読み取りに失敗しました (安全側として拒否します): $DEVICE"
+    fi
+    if [ -z "$swaps" ]; then
+        fail 14 "/proc/swapsの内容を取得できませんでした (安全側として拒否します): $DEVICE"
+    fi
+
+    # awkの異常終了 (0件の出力で正常終了する場合とは区別する) も
+    # 安全側として拒否する。
+    if ! swap_paths="$(printf '%s\n' "$swaps" | "$CMD_AWK" 'NR>1 {print $1}')"; then
+        fail 14 "/proc/swapsの解析に失敗しました (安全側として拒否します): $DEVICE"
+    fi
+
+    printf '%s\n' "$swap_paths" | while IFS= read -r swap_path; do
+        [ -n "$swap_path" ] || continue
+        swap_kname="$("$CMD_LSBLK" -dn -o KNAME -- "$swap_path" 2>/dev/null)" || swap_kname=''
+        if [ -z "$swap_kname" ]; then
+            # 解決できないswapエントリは安全側に倒して拒否する。
+            exit 1
+        fi
+        if printf '%s\n' "$target_knames" | "$CMD_GREP" -Fxq -- "$swap_kname"; then
+            exit 1
+        fi
+    done
+}
+
+# /sys/class/block/<KNAME>/holders が空であること (終了コード14)
+# (対象disk自身のholdersを確認する)
+check_holders_empty() {
+    holders_dir="/sys/class/block/$DEVICE_KNAME/holders"
+    if [ ! -d "$holders_dir" ]; then
+        fail 14 "holders情報を取得できませんでした (安全側として拒否します): $holders_dir"
+    fi
+    if ! holders_list="$("$CMD_LS" -A "$holders_dir" 2>/dev/null)"; then
+        fail 14 "holders情報の取得に失敗しました (安全側として拒否します): $holders_dir"
+    fi
+    if [ -n "$holders_list" ]; then
+        fail 14 "対象ディスクは device mapper 等の下位デバイスとして使用中です: $DEVICE"
+    fi
+}
+
+# 子パーティションがないこと (終了コード15)
+check_no_children() {
+    # 生のgrep -c ... || : には頼らない。DISK_ROWSの各行をextract_field
+    # TYPEで厳密に解析し、TYPEが正確に part の行が1件でもあれば
+    # (exit 1)、TYPEの解析自体に失敗した行があれば (exit 2)、
+    # いずれも子パーティションが存在する場合と同じ拒否結果とする。
+    # パイプラインの終了コードを明示的に捕捉し、set -eの暗黙動作には
+    # 依存しない。
+    rc=0
+    printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
+        type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || exit 2
+        if [ "$type_v" = 'part' ]; then
+            exit 1
+        fi
+    done || rc=$?
+    case "$rc" in
+        0)
+            ;;
+        1)
+            fail 15 "対象ディスクは既に子パーティションを持っています (whole diskではありません): $DEVICE"
+            ;;
+        *)
+            fail 15 "対象ディスクの子パーティション種別 (TYPE) を解析できませんでした (安全側として拒否します): $DEVICE"
+            ;;
+    esac
+}
+
+# PTTYPEが空であること (終了コード15)
+# PTTYPEが空文字であること自体は正常 (未使用ディスクの許可条件) だが、
+# lsblk自体の実行に失敗した場合は情報取得失敗として区別し、安全側に倒す。
+check_pttype_empty() {
+    if ! pttype="$("$CMD_LSBLK" -dn -o PTTYPE -- "$DEVICE" 2>/dev/null)"; then
+        fail 15 "PTTYPE情報を取得できませんでした (安全側として拒否します): $DEVICE"
+    fi
+    if [ -n "$pttype" ]; then
+        fail 15 "対象ディスクには既にパーティションテーブル ($pttype) が存在します: $DEVICE"
+    fi
+}
+
+# wipefsの読み取り専用検査で署名がないこと (終了コード15)
+# wipefs -n は署名の有無にかかわらず終了コード0を返すため、終了コードでは
+# 判定できない。-i (見出しなし) -O TYPE の出力が空かどうかで判定する。
+# wipefs自体の実行が失敗した場合 (コマンド実行エラー等) は、出力が空でも
+# 「署名なし」と誤認しないよう、情報取得失敗として区別し安全側に倒す。
+check_no_signature() {
+    if ! sig="$("$CMD_WIPEFS" -n -i -O TYPE -- "$DEVICE" 2>/dev/null)"; then
+        fail 15 "wipefsによる署名検査に失敗しました (安全側として拒否します): $DEVICE"
+    fi
+    if [ -n "$sig" ]; then
+        fail 15 "対象ディスクには既存の署名 (パーティションテーブル/ファイルシステム/LUKS/LVM/RAID等) が検出されました: $DEVICE"
+    fi
+}
+
+# 指定したマウント元パス (findmntのSOURCE) の祖先チェーン (自分自身を
+# 含む、lsblk --inverse (-s) による依存関係の上向き列挙) の中に
+# DEVICE_KNAME が含まれるかどうかを判定する。
+#
+# 戻り値:
+#   0 - 祖先チェーンに DEVICE_KNAME が含まれる (対象デバイスは使用中)
+#   1 - 祖先チェーンに DEVICE_KNAME が含まれない (安全)
+#   2 - 判定不能 (SOURCEが空/ブロックデバイスでない/lsblk失敗等) -
+#       呼び出し側は安全側 (使用中扱い) として処理すること
+#
+# lsblk -s (--inverse) は、指定したデバイスから見た祖先を
+# 「自分自身→親→…→ルートのdisk」の順に列挙する。overlay/loop/device
+# mapperを介している場合も、カーネルが報告する依存関係をそのままたどる
+# ため、TYPE=diskで終わることを前提にしない。祖先が複数段になっていても
+# 一括して列挙されるため、曖昧なまま失敗させることもない。
+ancestor_chain_contains_device() {
+    src="$1"
+    # findmntのSOURCEに /dev/vda1[/home] のようなサブディレクトリ表記が
+    # ある場合は、角括弧以降を除いてブロックデバイス部分だけを取り出す。
+    src="${src%%\[*}"
+
+    [ -n "$src" ] || return 2
+
+    case "$src" in
+        /dev/*) ;;
+        *) return 2 ;;
+    esac
+
+    if [ ! -b "$src" ]; then
+        return 2
+    fi
+
+    chain="$("$CMD_LSBLK" -s -P -b -o KNAME -- "$src" 2>/dev/null)" || return 2
+    [ -n "$chain" ] || return 2
+
+    knames="$(printf '%s\n' "$chain" | while IFS= read -r line; do
+        k_v="$(printf '%s\n' "$line" | extract_field KNAME)" || exit 1
+        [ -n "$k_v" ] || exit 1
+        printf '%s\n' "$k_v"
+    done)" || return 2
+    [ -n "$knames" ] || return 2
+
+    if printf '%s\n' "$knames" | "$CMD_GREP" -Fxq -- "$DEVICE_KNAME"; then
+        return 0
+    fi
+    return 1
+}
+
+# Live起動元デバイスと一致しないこと (終了コード14)
+# Liveメディアが光学ドライブ (/dev/sr0等) のように単独のleaf deviceで
+# ある場合も、祖先チェーンがそれ自身のみで正常に判定できる。
+check_not_live_source() {
+    live_source="$("$CMD_FINDMNT" -rn -o SOURCE --target /run/live/medium 2>/dev/null)" || live_source=''
+    if [ -z "$live_source" ]; then
+        fail 14 "Live起動元デバイスのSOURCEを取得できませんでした (安全側として拒否します): $DEVICE"
+    fi
+
+    rc=0
+    ancestor_chain_contains_device "$live_source" || rc=$?
+    if [ "$rc" -ne 1 ]; then
+        fail 14 "Live起動元デバイスと同一、または安全に判定できないため拒否します: $DEVICE"
+    fi
+}
+
+# /home提供元デバイスと一致しないこと (終了コード14)
+# 通常Live環境では /home は overlay (SOURCE=overlay, FSTYPE=overlay) で
+# あり、独立したブロックデバイスに直接依拠していないため、この場合は
+# チェックを通過させる。永続Live環境の /dev/vda1[/home] のように実際に
+# ブロックデバイスへマウントされている場合は、角括弧以降を除いた祖先
+# チェーンで対象diskとの一致を確認する。
+check_not_home_source() {
+    home_info="$("$CMD_FINDMNT" -rn -P -o SOURCE,FSTYPE --target /home 2>/dev/null)" || home_info=''
+    if [ -z "$home_info" ]; then
+        fail 14 "/home提供元の情報を取得できませんでした (安全側として拒否します): $DEVICE"
+    fi
+
+    home_source="$(printf '%s\n' "$home_info" | extract_field SOURCE)" \
+        || fail 14 "/home提供元のSOURCEフィールドを解析できませんでした (安全側として拒否します): $DEVICE"
+    home_fstype="$(printf '%s\n' "$home_info" | extract_field FSTYPE)" \
+        || fail 14 "/home提供元のFSTYPEフィールドを解析できませんでした (安全側として拒否します): $DEVICE"
+
+    if [ "$home_source" = 'overlay' ] && [ "$home_fstype" = 'overlay' ]; then
+        return 0
+    fi
+
+    case "$home_source" in
+        /dev/*) ;;
+        *)
+            fail 14 "/home提供元のSOURCEを安全に判定できません (SOURCE=${home_source:-取得不可}, FSTYPE=${home_fstype:-取得不可}): $DEVICE"
+            ;;
+    esac
+
+    rc=0
+    ancestor_chain_contains_device "$home_source" || rc=$?
+    if [ "$rc" -ne 1 ]; then
+        fail 14 "/home提供元デバイスと同一、または安全に判定できないため拒否します: $DEVICE"
+    fi
+}
+
+# システム全体にLABEL=persistenceが存在しないこと (終了コード16)
+# lsblk自体の実行に失敗した場合、「一致なし」と誤認しないよう区別する。
+check_no_existing_label() {
+    if ! label_rows="$("$CMD_LSBLK" -b -P -o LABEL 2>/dev/null)"; then
+        fail 16 'システム全体のLABEL情報を取得できませんでした (安全側として拒否します)。'
+    fi
+    if [ -z "$label_rows" ]; then
+        fail 16 'システム全体のLABEL情報が空でした (安全側として拒否します)。'
+    fi
+    # 全行についてLABELフィールドが厳密に解析できることを要求する
+    # (値が空であること自体は正常)。生のgrepによる部分文字列一致では
+    # なく、extract_fieldで解析した値が厳密に persistence と一致する
+    # 場合のみ拒否する。1行でも解析できなければ安全側に倒す。
+    printf '%s\n' "$label_rows" | while IFS= read -r line; do
+        val="$(printf '%s\n' "$line" | extract_field LABEL)" || exit 1
+        if [ "$val" = 'persistence' ]; then
+            exit 1
+        fi
+    done || fail 16 'システム内に既存のLABEL=persistenceが見つかったか、LABEL情報を解析できませんでした。新規作成を拒否します。'
+}
+
+# システム全体にPARTLABEL=persistenceが存在しないこと (終了コード16)
+check_no_existing_partlabel() {
+    if ! partlabel_rows="$("$CMD_LSBLK" -b -P -o PARTLABEL 2>/dev/null)"; then
+        fail 16 'システム全体のPARTLABEL情報を取得できませんでした (安全側として拒否します)。'
+    fi
+    if [ -z "$partlabel_rows" ]; then
+        fail 16 'システム全体のPARTLABEL情報が空でした (安全側として拒否します)。'
+    fi
+    printf '%s\n' "$partlabel_rows" | while IFS= read -r line; do
+        val="$(printf '%s\n' "$line" | extract_field PARTLABEL)" || exit 1
+        if [ "$val" = 'persistence' ]; then
+            exit 1
+        fi
+    done || fail 16 'システム内に既存のPARTLABEL=persistenceが見つかったか、PARTLABEL情報を解析できませんでした。新規作成を拒否します。'
+}
+
+# 実行順序: 既存persistence領域の検査 (システム全体、終了コード16) を、
+# 子パーティション・PTTYPE・wipefs署名検査 (終了コード15) より先に行う。
+final_verification() {
+    reverify_device
+    fetch_disk_rows
+
+    if ! check_not_mounted; then
+        fail 14 "対象ディスクまたはその子パーティションが既にマウントされています: $DEVICE"
+    fi
+    if ! check_not_swap; then
+        fail 14 "対象ディスクまたはその子パーティションがスワップとして使用中です: $DEVICE"
+    fi
+    check_holders_empty
+    check_not_live_source
+    check_not_home_source
+    check_no_existing_label
+    check_no_existing_partlabel
+    check_no_children
+    check_pttype_empty
+    check_no_signature
+}
+
+# ---- 作成したパーティションの特定・検証 (終了コード21) ---------------------
+# デバイス名の単純連結 ("1"やp1の付加) はしない。検出数が厳密に1件で
+# あることに加え、PATHが/dev直下であること・シンボリックリンクでない
+# こと・実在するblock deviceであること・TYPE=partであること・PKNAMEが
+# 対象diskのKNAMEと完全一致すること・RO=0であることを確認する。
+# 1つでも不一致・取得失敗であれば mkfs へは進まず拒否する。
+identify_created_partition() {
+    rows="$("$CMD_LSBLK" -b -P -o NAME,PATH,TYPE,PKNAME,MAJ:MIN -- "$DEVICE" 2>/dev/null)" || rows=''
+    if [ -z "$rows" ]; then
+        fail 21 "作成されたパーティション情報を取得できませんでした: $DEVICE"
+    fi
+
+    # 生のgrep 'TYPE="part"'で行を選ばない。各行のNAME/PATH/TYPE/PKNAME/
+    # MAJ:MINを厳密に解析し、TYPEが正確に part の行だけを候補として拾う。
+    # いずれかのフィールドが解析できない・PATH/TYPE/MAJ:MINが空の行は
+    # 即座に拒否する (曖昧な行を後段に残さない)。
+    matches="$(printf '%s\n' "$rows" | while IFS= read -r line; do
+        name_v="$(printf '%s\n' "$line" | extract_field NAME)" || exit 1
+        path_v="$(printf '%s\n' "$line" | extract_field PATH)" || exit 1
+        type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || exit 1
+        pkname_v="$(printf '%s\n' "$line" | extract_field PKNAME)" || exit 1
+        majmin_v="$(printf '%s\n' "$line" | extract_field 'MAJ:MIN')" || exit 1
+        [ -n "$name_v" ] || exit 1
+        [ -n "$path_v" ] || exit 1
+        [ -n "$type_v" ] || exit 1
+        [ -n "$majmin_v" ] || exit 1
+        if [ "$type_v" = 'part' ]; then
+            printf '%s|%s|%s\n' "$path_v" "$pkname_v" "$majmin_v"
+        fi
+    done)" || fail 21 "作成されたパーティション情報の解析に失敗しました: $DEVICE"
+
+    # 件数取得コマンド自体の失敗を明示的に拒否する。grep -c は一致0件の
+    # 場合に終了コード1を返す仕様であり、「コマンドが異常終了した」のか
+    # 「正しく実行できたが0件だった」のかを区別できないため、常に終了
+    # コード0を返すawkのカウントに置き換える (「.」廃止)。
+    if ! match_count="$(printf '%s\n' "$matches" | "$CMD_AWK" 'length($0)>0{c++} END{print c+0}')"; then
+        fail 21 "作成されたパーティション件数の取得に失敗しました: $DEVICE"
+    fi
+    case "$match_count" in
+        '' | *[!0-9]*)
+            fail 21 "作成されたパーティション件数が不正な形式です (取得値: ${match_count:-取得不可}): $DEVICE"
+            ;;
+    esac
+    if [ "$match_count" -ne 1 ]; then
+        fail 21 "作成されたパーティションを一意に特定できませんでした (検出数: $match_count): $DEVICE"
+    fi
+
+    part_path="$(printf '%s\n' "$matches" | "$CMD_AWK" -F'|' '{print $1}')" \
+        || fail 21 "作成されたパーティションのPATHの取得に失敗しました: $DEVICE"
+    part_pkname="$(printf '%s\n' "$matches" | "$CMD_AWK" -F'|' '{print $2}')" \
+        || fail 21 "作成されたパーティションのPKNAMEの取得に失敗しました: $DEVICE"
+    part_majmin="$(printf '%s\n' "$matches" | "$CMD_AWK" -F'|' '{print $3}')" \
+        || fail 21 "作成されたパーティションのMAJOR:MINORの取得に失敗しました: $DEVICE"
+
+    case "$part_path" in
+        /dev/*) ;;
+        *)
+            fail 21 "作成されたパーティションのPATHが/dev以下ではありません: $part_path"
+            ;;
+    esac
+
+    part_parent="${part_path%/*}"
+    if [ "$part_parent" != '/dev' ]; then
+        fail 21 "作成されたパーティションのPATHが/dev直下ではありません: $part_path"
+    fi
+
+    if [ -L "$part_path" ]; then
+        fail 21 "作成されたパーティションがシンボリックリンクです: $part_path"
+    fi
+
+    if [ ! -b "$part_path" ]; then
+        fail 21 "作成されたパーティションが実在するブロックデバイスではありません: $part_path"
+    fi
+
+    if [ -z "$part_pkname" ] || [ "$part_pkname" != "$DEVICE_KNAME" ]; then
+        fail 21 "作成されたパーティションのPKNAMEが対象ディスクと一致しません: $part_path"
+    fi
+
+    part_ro="$("$CMD_LSBLK" -dn -o RO -- "$part_path" 2>/dev/null)" || part_ro=''
+    if [ "$part_ro" != '0' ]; then
+        fail 21 "作成されたパーティションが読み取り専用です: $part_path"
+    fi
+
+    CREATED_PART_PATH="$part_path"
+    # mkfs直前の再検証 (reverify_created_partition) で使うため、識別時の
+    # MAJOR:MINORを記録しておく。
+    CREATED_PART_MAJMIN="$part_majmin"
+}
+
+# ---- 作成したパーティションの再検証 (mkfs直前、終了コード21) ---------------
+# identify_created_partitionでの識別から mkfs 実行までの間に、対象
+# パーティション自身の状態が変化していないかを再確認する。PATH/TYPE/
+# PKNAME/RO/MAJOR:MINORの一致に加え、実在するブロックデバイスであること・
+# シンボリックリンクでないことも改めて確認する。1つでも不一致・取得失敗
+# であれば mkfs へは進まず拒否する。
+reverify_created_partition() {
+    if [ -L "$CREATED_PART_PATH" ]; then
+        fail 21 "再検証: 作成されたパーティションがシンボリックリンクになっています: $CREATED_PART_PATH"
+    fi
+    if [ ! -e "$CREATED_PART_PATH" ]; then
+        fail 21 "再検証: 作成されたパーティションが存在しません: $CREATED_PART_PATH"
+    fi
+    if [ ! -b "$CREATED_PART_PATH" ]; then
+        fail 21 "再検証: 作成されたパーティションがブロックデバイスではなくなっています: $CREATED_PART_PATH"
+    fi
+
+    path_now="$("$CMD_LSBLK" -dn -o PATH -- "$CREATED_PART_PATH" 2>/dev/null)" || path_now=''
+    if [ "$path_now" != "$CREATED_PART_PATH" ]; then
+        fail 21 "再検証: 作成されたパーティションのPATHが一致しません: $CREATED_PART_PATH"
+    fi
+
+    type_now="$("$CMD_LSBLK" -dn -o TYPE -- "$CREATED_PART_PATH" 2>/dev/null)" || type_now=''
+    if [ "$type_now" != 'part' ]; then
+        fail 21 "再検証: 作成されたパーティションのTYPEがpartではなくなっています: $CREATED_PART_PATH"
+    fi
+
+    pkname_now="$("$CMD_LSBLK" -dn -o PKNAME -- "$CREATED_PART_PATH" 2>/dev/null)" || pkname_now=''
+    if [ -z "$pkname_now" ] || [ "$pkname_now" != "$DEVICE_KNAME" ]; then
+        fail 21 "再検証: 作成されたパーティションのPKNAMEが一致しません: $CREATED_PART_PATH"
+    fi
+
+    ro_now="$("$CMD_LSBLK" -dn -o RO -- "$CREATED_PART_PATH" 2>/dev/null)" || ro_now=''
+    if [ "$ro_now" != '0' ]; then
+        fail 21 "再検証: 作成されたパーティションが読み取り専用になっています: $CREATED_PART_PATH"
+    fi
+
+    majmin_now="$("$CMD_LSBLK" -dn -o MAJ:MIN -- "$CREATED_PART_PATH" 2>/dev/null)" || majmin_now=''
+    if [ -z "$majmin_now" ] || [ "$majmin_now" != "$CREATED_PART_MAJMIN" ]; then
+        fail 21 "再検証: 作成されたパーティションのMAJOR:MINORが識別時と一致しません: $CREATED_PART_PATH"
+    fi
+}
+
+# ---- 作成したパーティションの署名検査 (mkfs前、終了コード21) ---------------
+# parted/partprobe/udevadm settle の直後、mkfs.ext4を実行する前に、
+# 新規作成したパーティション自身に対して wipefs -n (読み取り専用) を
+# 実行し、署名が無いことを確認する。ここで署名が検出された場合や
+# wipefs自体が失敗した場合は、GPT/パーティションは既に作成済みの途中
+# 状態であることを明示したうえで mkfs へは進まず拒否する。自動wipe・
+# 自動再試行・-F による強制フォーマットは行わない。
+check_created_partition_no_signature() {
+    if ! sig="$("$CMD_WIPEFS" -n -i -O TYPE -- "$CREATED_PART_PATH" 2>/dev/null)"; then
+        fail 21 "作成されたパーティションの署名検査 (wipefs) に失敗しました。GPT/パーティションは作成済みの途中状態です: $CREATED_PART_PATH"
+    fi
+    if [ -n "$sig" ]; then
+        fail 21 "作成されたパーティションに既存の署名が検出されました。GPT/パーティションは作成済みの途中状態です: $CREATED_PART_PATH"
+    fi
+}
+
+# ---- メイン処理 ------------------------------------------------------------
+
+check_required_commands
+check_root
+check_live_env
+validate_device_arg "$DEVICE_ARG"
+validate_majmin "$MAJMIN_ARG"
+acquire_lock
+final_verification
+
+# final_verification完了からpartedによる破壊的操作開始までの間隙を
+# さらに縮小するため、直前にもう一度DEVICEの基本属性を再検証する。
+reverify_device
+check_signal
+
+stage 'gpt'
+if ! "$CMD_PARTED" -s -- "$DEVICE" mklabel gpt; then
+    fail 20 "GPTパーティションテーブルの作成に失敗しました: $DEVICE"
+fi
+check_signal
+
+stage 'partition'
+if ! "$CMD_PARTED" -s -- "$DEVICE" mkpart persistence ext4 1MiB 100%; then
+    fail 21 "persistenceパーティションの作成に失敗しました: $DEVICE"
+fi
+
+if ! "$CMD_PARTPROBE" -- "$DEVICE"; then
+    fail 21 "partprobeによるパーティション情報の再読込に失敗しました: $DEVICE"
+fi
+
+if ! "$CMD_UDEVADM" settle; then
+    fail 21 "udevadm settleに失敗しました: $DEVICE"
+fi
+
+identify_created_partition
+check_created_partition_no_signature
+check_signal
+
+# mkfs直前にも、親DEVICEのPATH/KNAME/TYPE/RO/MAJOR:MINORと、作成された
+# パーティション自身のPATH/TYPE/PKNAME/RO/MAJOR:MINOR (block device・
+# 非symlinkも含む) の両方を改めて確認する (TOCTOU窓のさらなる縮小)。
+reverify_device
+reverify_created_partition
+check_signal
+
+stage 'mkfs'
+# 新規作成・親子関係まで検証済みのパーティションのみを対象とするため、
+# 本番コードでは mkfs.ext4 の -F (強制実行) は使用しない。標準入力は
+# /dev/null に接続し、想定外の確認プロンプトで待機しないようにする。
+if ! "$CMD_MKFS_EXT4" -q -L persistence -- "$CREATED_PART_PATH" < /dev/null; then
+    fail 22 "ext4ファイルシステムの作成に失敗しました: $CREATED_PART_PATH"
+fi
+check_signal
+
+stage 'mount'
+MNT_DIR="$("$CMD_MKTEMP" -d /run/mypocketos-persistence-setup-helper.XXXXXX 2>/dev/null)" \
+    || fail 23 '一時作業ディレクトリの作成に失敗しました。'
+check_signal
+
+if ! "$CMD_MOUNT" -- "$CREATED_PART_PATH" "$MNT_DIR"; then
+    fail 23 "一時マウントに失敗しました: $CREATED_PART_PATH -> $MNT_DIR"
+fi
+MOUNTED=1
+check_signal
+
+stage 'conf'
+CONF_PATH="$MNT_DIR/persistence.conf"
+if ! printf '/home\n' > "$CONF_PATH"; then
+    fail 24 "persistence.confの書き込みに失敗しました: $CONF_PATH"
+fi
+
+# 書き込んだ内容を機械的に検証する ("/home" + 改行1つ = 6バイトちょうど)。
+conf_size="$("$CMD_STAT" -c '%s' -- "$CONF_PATH" 2>/dev/null)" || conf_size=''
+if [ "$conf_size" != '6' ]; then
+    fail 24 "persistence.confの内容確認に失敗しました (サイズ: ${conf_size:-取得不可} バイト): $CONF_PATH"
+fi
+conf_content="$("$CMD_CAT" -- "$CONF_PATH" 2>/dev/null)" || conf_content=''
+if [ "$conf_content" != '/home' ]; then
+    fail 24 "persistence.confの内容確認に失敗しました (内容不一致): $CONF_PATH"
+fi
+check_signal
+
+stage 'sync'
+if ! "$CMD_SYNC"; then
+    fail 25 'syncに失敗しました。'
+fi
+check_signal
+
+stage 'umount'
+if ! "$CMD_UMOUNT" -- "$MNT_DIR"; then
+    fail 25 "アンマウントに失敗しました: $MNT_DIR"
+fi
+MOUNTED=0
+check_signal
+
+stage 'done'
+exit 0
