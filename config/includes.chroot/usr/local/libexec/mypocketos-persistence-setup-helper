@@ -716,7 +716,7 @@ check_not_live_source() {
 # ブロックデバイスへマウントされている場合は、角括弧以降を除いた祖先
 # チェーンで対象diskとの一致を確認する。
 check_not_home_source() {
-    home_info="$("$CMD_FINDMNT" -rn -P -o SOURCE,FSTYPE --target /home 2>/dev/null)" || home_info=''
+    home_info="$("$CMD_FINDMNT" -n -P -o SOURCE,FSTYPE --target /home 2>/dev/null)" || home_info=''
     if [ -z "$home_info" ]; then
         fail 14 "/home提供元の情報を取得できませんでした (安全側として拒否します): $DEVICE"
     fi

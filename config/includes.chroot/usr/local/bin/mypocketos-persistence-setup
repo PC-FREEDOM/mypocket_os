@@ -317,7 +317,7 @@ build_candidates() {
         CANDIDATES=''
         return 0
     fi
-    home_info="$(findmnt -rn -P -o SOURCE,FSTYPE --target /home 2>/dev/null)" || home_info=''
+    home_info="$(findmnt -n -P -o SOURCE,FSTYPE --target /home 2>/dev/null)" || home_info=''
     if [ -z "$home_info" ]; then
         CANDIDATES=''
         return 0
