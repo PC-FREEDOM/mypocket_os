@@ -2,8 +2,8 @@
 #
 # mypocketos-persistence-setup-helper - MyPocketOS 永続領域作成の特権ヘルパー
 #
-# README.md の「GUIによる永続領域作成 (設計)」節に基づく実装。
-# GUI本体 (mypocketos-persistence-setup、未実装) から
+# README.md の「GUIによる永続領域作成 (実装仕様)」節に基づく実装。
+# GUI本体 (mypocketos-persistence-setup、実装済み) から
 #   sudo -n -- mypocketos-persistence-setup-helper create DEVICE MAJOR:MINOR
 # の形で1回だけ呼び出されることを前提とする。sudoはGUI側が使うものであり、
 # 本スクリプト自身はsudoを実行しない (常にroot権限で起動される前提)。
