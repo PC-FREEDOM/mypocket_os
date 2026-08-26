@@ -254,10 +254,9 @@ BIOS版は `mypocketos-test`、UEFI版は `mypocketos-uefi-test` という名前
   `/home` の1行だけ) が必要です。
 - 暗号化 (LUKS等) は未実装です。
 - GUIによるパーティション作成は実装済みであり、2026-08-26に専用の
-  BIOS版使い捨てテストVMで、GUIから実際に新規persistence領域を作成
-  できることを確認済みです (詳細は「GUIによる永続領域作成 (実装仕様)」
-  節の「動作確認」を参照)。GUI経由でのUEFI VMに対する新規作成は
-  未確認です。
+  BIOS版・UEFI版の双方の使い捨てテストVMで、GUIから実際に新規
+  persistence領域を作成できることを確認済みです (詳細は「GUIによる
+  永続領域作成 (実装仕様)」節の「動作確認」を参照)。
 - `/home` 配下の一般アプリ設定・ユーザーデータは保存対象です。
 - 追加インストールしたアプリ本体、パッケージ一覧、APTキャッシュの永続化は
   未実装です。
@@ -419,19 +418,19 @@ UEFI版VM (`mypocketos-uefi-test`, OVMFによる64-bit UEFI起動) でも、同�
 
 - GUIによる永続領域作成は、本手順 (GUIを介さず`parted`/`mkfs.ext4`/
   `mount`/`tee`を直接実行するBIOS/UEFI手動永続化テスト) の対象には
-  含まれていません。GUI経由の新規作成は、本手順とは別に、専用のBIOS版
-  使い捨てテストVMを用いて確認済みです (詳細は「GUIによる永続領域作成
-  (実装仕様)」節の「動作確認」を参照)。GUI経由でのUEFI VMに対する
-  新規作成、および署名・mount・swap・holders等の各拒否条件を個別の
-  実ブロックデバイスで確認する実機試験は未確認です。
+  含まれていません。GUI経由の新規作成は、本手順とは別に、専用のBIOS版・
+  UEFI版の双方の使い捨てテストVMを用いて確認済みです (詳細は「GUIに
+  よる永続領域作成 (実装仕様)」節の「動作確認」を参照)。署名・mount・
+  swap・holders等の各拒否条件を個別の実ブロックデバイスで確認する
+  実機試験は未確認です。
 - LUKSによる暗号化は未実装です。
 - 追加インストールしたアプリ本体、パッケージ一覧、APTキャッシュの
   永続化は未実装です。
 
 上記のとおり、BIOS/SyslinuxとUEFI/GRUBの両方で `/home` の永続化を
-確認済みです (GUI経由のBIOS版新規作成も別途確認済みです)。GUI経由の
-UEFI新規作成、暗号化、アプリ本体の永続化といった、本手順の対象外または
-未実装の機能については、確認済みとはみなしていません。
+確認済みです (GUI経由のBIOS版・UEFI版新規作成も別途確認済みです)。
+暗号化、アプリ本体の永続化といった、本手順の対象外または未実装の
+機能については、確認済みとはみなしていません。
 
 ### GUIによる永続領域作成 (実装仕様)
 
@@ -444,18 +443,21 @@ GUI本体 (`/usr/local/bin/mypocketos-persistence-setup`)・特権ヘルパー
 (GUI・helper双方) による検証を行っている。
 
 2026-08-26には、この変更を含むISOを実際に再ビルドし、専用のBIOS版
-使い捨てテストVM `mypocketos-persistence-gui-test` (共有ISO
-`MyPocketOS-dev.iso`と新規の空16GiB qcow2ディスクのみを接続) 上で、
-GUI経由の実際の新規persistence領域作成まで確認した (詳細は後述の
-「動作確認」節を参照)。**GUI経由の実機確認は、このBIOS版使い捨てVMに
-限定される。**
+使い捨てテストVM `mypocketos-persistence-gui-test`、および専用の
+UEFI版使い捨てテストVM `mypocketos-persistence-gui-uefi-test`
+(いずれも共有ISO `MyPocketOS-dev.iso`と新規の空16GiB qcow2ディスクの
+みを接続) 上で、GUI経由の実際の新規persistence領域作成まで確認した
+(詳細は後述の「動作確認」節を参照)。**GUI経由の実動作は、専用BIOS VM
+と専用UEFI VMの双方で確認済みである。** 同じくBIOS版使い捨てVM上で、
+既存の永続領域を持つディスクに対してGUI・helperが実際に新規作成を
+拒否することも確認した。
 
 一方、次の項目は未確認である。
 
-- GUI経由でのUEFI VMに対する新規作成。
 - 署名・mount・swap・holders等、各拒否条件を個別の実ブロックデバイスを
   追加して確認する実機試験 (これらは非破壊モックテストでは確認済み)。
-- 既存persistenceディスクへの、helper直接呼び出しによる実機拒否確認。
+- 専用UEFI VMでのSecure Boot有効状態 (`mokutil`未搭載のため未確認。
+  UEFI起動自体は確認済み)。
 
 これらは、上記「手動テスト手順」節のBIOS/UEFI手動永続化テスト (GUIを
 介さず`parted`/`mkfs.ext4`/`mount`/`tee`を直接実行して確認したもの) とは
@@ -829,8 +831,9 @@ GUI本体 (`mypocketos-persistence-setup`) を起動する項目を実装して�
 
 そのため、GUIによる新規作成テストには、既存の永続化ディスクが一切
 接続されていない、新規の専用・使い捨てテストVM
-`mypocketos-persistence-gui-test` (BIOS版) を用意して使用した。この
-VMには次のみを接続した。
+`mypocketos-persistence-gui-test` (BIOS版)、および
+`mypocketos-persistence-gui-uefi-test` (UEFI版、OVMF・専用NVRAM使用、
+TPMは接続なし) を用意して使用した。いずれのVMにも次のみを接続した。
 
 - `MyPocketOS-dev.iso` (共有ISO、読み取りのみ)。
 - 内容を失ってよいことを明示的に確認した、新規の空16GiB qcow2ディスク。
@@ -903,16 +906,72 @@ VMには次のみを接続した。
   確認した。
 - 各再起動でカーネルの`boot_id`が変化していることを確認した。
 
+**専用UEFI版使い捨てVMでの新規作成・永続化確認 (2026-08-26)**
+
+専用のUEFI版使い捨てテストVM `mypocketos-persistence-gui-uefi-test`
+(`firmware=efi`、OVMF・専用NVRAM使用、TPMは接続なし) 上で、BIOS版と
+同様の手順により次を確認した。
+
+- ゲスト内で`/sys/firmware/efi`の存在を確認し、UEFI起動であることを
+  確認した。Secure Bootの状態は、Live環境に`mokutil`が含まれていない
+  ため確認していない。
+- 通常Live (`nopersistence`) 起動後、メニューに追加された「永続領域を
+  作成」からGUIを起動し、候補一覧には接続された空のwhole disk
+  `/dev/vda`のみが表示されることを確認した。
+- GUIから正しい確認文字列を入力し、GPTパーティションテーブルと
+  `/dev/vda1`が作成されることを確認した。
+- `/dev/vda1`はext4でフォーマットされ、LABEL・PARTLABELともに
+  `persistence`であることを確認した。
+- `persistence.conf`は所有者`root:root`、パーミッション`0600`、
+  サイズ6バイトで、内容が`/home`+改行1つであることを確認した。
+- `e2fsck -fn`でエラーが検出されないことを確認した。
+- 処理終了後、GUI・helperのロックおよび一時作業領域のいずれも
+  残っていないことを確認した。
+- 作成した領域を用いてUEFI Persistenceモードで起動した場合、
+  カーネルコマンドラインに`persistence`が1件、`nopersistence`が0件で
+  あることを確認した。
+- `/home`が`/dev/vda1[/home]`としてext4でread-writeマウントされる
+  ことを確認した。
+- `/home/user`が`user:user`所有、パーミッション`0700`で作成される
+  ことを確認した。
+- 作成したテストファイルが、UEFI Persistenceモードで再起動した後も
+  内容・所有者・パーミッション (`0600`) を維持していることを確認した。
+- UEFI通常Liveに切り替えるとテストファイルが表示されず、`/dev/vda1`も
+  マウントされないことを確認した。
+- 各再起動でカーネルの`boot_id`が変化していることを確認した。
+- 作成したパーティションのUUIDは`f99149e3-c88e-4f4b-a7b6-940f39c7e257`
+  であった。
+
+**既存persistence領域に対するGUI/helperの実機拒否確認 (2026-08-26)**
+
+上記のBIOS版使い捨てテストVM `mypocketos-persistence-gui-test`上に、
+新規作成テストにより既に作成済みのpersistence領域が存在する状態を
+用いて、次を確認した。
+
+- 通常LiveでGUIを起動すると、システム内の既存`LABEL=persistence`が
+  検出され、候補一覧が0件になることを確認した。
+- GUI終了後、プロセス・GUIロック・一時作業領域のいずれも残っていない
+  ことを確認した。
+- ヘルパーを、対象ディスク`/dev/vda`と正しい`MAJOR:MINOR`を指定して
+  (GUI経由ではなく) 直接呼び出した場合、システム内の既存
+  `LABEL=persistence`を検出し、exit 16で拒否されることを確認した。
+- helper呼び出しの実行前後で、対象パーティションのUUID
+  (`ca12dd1f-1738-4776-8d26-c1eda925c939`) が一致し、LABEL・PARTLABEL・
+  ext4署名も維持されていることを確認した。
+- helperのロックも残っていないことを確認した。
+- 対象ディスクの内容は、上記いずれの試行によっても変更されていない
+  ことを確認した。
+
 上記のとおり、既存の`mypocketos-test`と`mypocketos-uefi-test`、および
-両VMの永続化ディスクは、このGUI新規作成テストのために変更・
-再フォーマット・取り外しのいずれも行っていない。
+両VMの永続化ディスクは、これらのGUI新規作成テスト・既存persistence
+拒否確認のために変更・再フォーマット・取り外しのいずれも行っていない。
 
 **この動作確認で確認していない事項**
 
-- GUI経由でのUEFI VMに対する新規作成。
 - 署名・mount・swap・holders等、各拒否条件を個別の実ブロックデバイスを
   追加して確認する実機試験 (これらは非破壊モックテストでは確認済み)。
-- 既存persistenceディスクへの、helper直接呼び出しによる実機拒否確認。
+- 専用UEFI VMでのSecure Boot有効状態 (`mokutil`未搭載のため未確認。
+  UEFI起動自体は確認済み)。
 - LUKSによる暗号化、部分的な空き領域を利用した永続化、既存永続領域の
   変更、複数の永続領域の作成・切り替え、`/home`以外の永続化、追加
   インストールしたアプリ本体の永続化 (いずれも「初版のスコープ外」節
