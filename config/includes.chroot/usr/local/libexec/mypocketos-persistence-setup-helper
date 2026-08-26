@@ -357,11 +357,12 @@ validate_device_arg() {
 }
 
 # ---- MAJOR:MINORの一致確認 (終了コード13) ----------------------------------
-# GUI側・ヘルパー側の双方で同じ取得方法 (lsblk -dn -o MAJ:MIN) を用い、
+# GUI側はlsblk -PのMAJ:MINフィールドから値を取得し、ヘルパー側は
+# lsblk -dnr -o MAJ:MINで列幅調整のない値を取得して、
 # 文字列として厳密に比較する (statの書式とは混在させない)。
 validate_majmin() {
     given="$1"
-    current="$("$CMD_LSBLK" -dn -o MAJ:MIN -- "$DEVICE" 2>/dev/null)" || current=''
+    current="$("$CMD_LSBLK" -dnr -o MAJ:MIN -- "$DEVICE" 2>/dev/null)" || current=''
     if [ -z "$current" ] || [ "$current" != "$given" ]; then
         fail 13 "指定されたMAJOR:MINOR ($given) が現在の値 (${current:-取得不可}) と一致しません: $DEVICE"
     fi
@@ -434,7 +435,7 @@ reverify_device() {
         fail "$device_ec" "再検証: DEVICEは読み取り専用になっています${state_note}: $DEVICE"
     fi
 
-    majmin_now="$("$CMD_LSBLK" -dn -o MAJ:MIN -- "$DEVICE" 2>/dev/null)" || majmin_now=''
+    majmin_now="$("$CMD_LSBLK" -dnr -o MAJ:MIN -- "$DEVICE" 2>/dev/null)" || majmin_now=''
     if [ -z "$majmin_now" ] || [ "$majmin_now" != "$MAJMIN_ARG" ]; then
         fail "$majmin_ec" "再検証: MAJOR:MINORが初回検証時と一致しません${state_note}: $DEVICE"
     fi
@@ -929,7 +930,7 @@ reverify_created_partition() {
         fail 21 "再検証: 作成されたパーティションが読み取り専用になっています: $CREATED_PART_PATH"
     fi
 
-    majmin_now="$("$CMD_LSBLK" -dn -o MAJ:MIN -- "$CREATED_PART_PATH" 2>/dev/null)" || majmin_now=''
+    majmin_now="$("$CMD_LSBLK" -dnr -o MAJ:MIN -- "$CREATED_PART_PATH" 2>/dev/null)" || majmin_now=''
     if [ -z "$majmin_now" ] || [ "$majmin_now" != "$CREATED_PART_MAJMIN" ]; then
         fail 21 "再検証: 作成されたパーティションのMAJOR:MINORが識別時と一致しません: $CREATED_PART_PATH"
     fi
