@@ -1,0 +1,144 @@
+name: Static checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            dash \
+            libxml2-utils
+
+      - name: Check POSIX shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t files < <(
+            git grep -l -e '^#!/bin/sh$'
+          )
+
+          if ((${#files[@]} == 0)); then
+            echo 'No POSIX shell files were detected.' >&2
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            echo "Checking with sh: $file"
+            sh -n "$file"
+
+            echo "Checking with dash: $file"
+            dash -n "$file"
+          done
+
+      - name: Check Bash syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t files < <(
+            git grep -l \
+              -e '^#!/usr/bin/env bash$' \
+              -e '^#!/bin/bash$'
+          )
+
+          if ((${#files[@]} == 0)); then
+            echo 'No Bash files were detected.' >&2
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            echo "Checking with bash: $file"
+            bash -n "$file"
+          done
+
+      - name: Check executable modes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t files < <(
+            git grep -l \
+              -e '^#!/bin/sh$' \
+              -e '^#!/usr/bin/env bash$' \
+              -e '^#!/bin/bash$'
+          )
+
+          for file in "${files[@]}"; do
+            mode="$(
+              git ls-files --stage -- "$file" |
+                awk 'NR == 1 { print $1 }'
+            )"
+
+            if [[ "$mode" != '100755' ]]; then
+              echo "Expected mode 100755, found ${mode:-untracked}: $file" >&2
+              exit 1
+            fi
+          done
+
+      - name: Check XML
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t files < <(
+            git ls-files '*.xml'
+          )
+
+          if ((${#files[@]} == 0)); then
+            echo 'No XML files were detected.' >&2
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            echo "Checking XML: $file"
+            xmllint --noout "$file"
+          done
+
+      - name: Check changed whitespace
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              git diff --check "$BASE_SHA...HEAD"
+              ;;
+            push)
+              if [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+                git diff --check "$BEFORE_SHA..HEAD"
+              else
+                empty_tree="$(git hash-object -t tree /dev/null)"
+                git diff --check "$empty_tree" HEAD
+              fi
+              ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
