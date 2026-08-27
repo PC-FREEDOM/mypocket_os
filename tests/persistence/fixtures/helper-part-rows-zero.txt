@@ -1,0 +1,1 @@
+NAME="fakedisk1" PATH="__FAKE_PART_PATH__" TYPE="disk" PKNAME="fakedisk" MAJ:MIN="259:1"

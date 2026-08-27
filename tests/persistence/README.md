@@ -13,11 +13,12 @@ tests/persistence/run.sh
 一般ユーザー権限のみで完結する。実行に `sudo`・実`parted`・実`mkfs.ext4`・
 実`mount`・実`umount`・実`sync`・VM/ISO/qcow2操作は一切必要ない。
 
-GUI本体・helperそれぞれ単体で実行する場合:
+GUI本体・helper (既存回帰)・helper失敗マトリクスをそれぞれ単体で実行する場合:
 
 ```sh
 tests/persistence/test_gui.sh
 tests/persistence/test_helper.sh
+tests/persistence/test_helper_failure_matrix.sh
 ```
 
 ## 安全上の前提
@@ -52,8 +53,16 @@ tests/persistence/
   instrument_helper.sh     helperをsandbox化したコピーを生成する
   mock_command.sh          $SANDBOX/bin へ全モックコマンドを書き出す
   test_gui.sh              GUI本体のシナリオ (13件)
-  test_helper.sh           helperのシナリオ (7件)
-  run.sh                   単一エントリポイント (GUI + helper + 整合性確認)
+  test_helper.sh           helperの既存回帰シナリオ (7件、既存20シナリオ・
+                           52アサーションの一部として変更しない)
+  test_helper_failure_matrix.sh
+                           helperの公開終了コード
+                           (2, 10, 14, 15, 20〜25, 70, 71) に対する
+                           決定論的な失敗マトリクス (51シナリオ・
+                           258アサーション。数値はファイル自身の
+                           実行結果 `SCENARIOS=`/`PASS=` 行が正とする)
+  run.sh                   単一エントリポイント (GUI + helper + 失敗
+                           マトリクス + 整合性確認)
   fixtures/                lsblk -P 形式の固定データセット (sandbox外、
                            コミット対象)
 ```
@@ -108,6 +117,19 @@ tests/persistence/
    `id`/`stat`は既知の引数形式にのみ応答し、未知の形式は`exit 98`で
    拒否する。
 
+失敗マトリクス (`test_helper_failure_matrix.sh`) 向けに、`rmdir`
+(`MOCK_FAIL_RMDIR_LOCK`/`MOCK_FAIL_RMDIR_MNT`)・`mount`
+(`MOCK_CONF_PATH_IS_DIR`)・`cat`
+(`MOCK_FAKE_CONF_CONTENT`、対象は`persistence.conf`のみ) に、
+既定値が未設定/0のopt-in環境変数によるフックを追加している。いずれも
+未設定時の挙動は変更前と同一であり、既存20シナリオ・52アサーションには
+影響しない。`MOCK_CONF_PATH_IS_DIR`は、persistence.confの書き込み失敗
+(終了コード24) を再現するために、CONF_PATHの位置へ`mount`モックが
+事前に空ディレクトリを作る (helper側の書き込みをchmodではなくEISDIRで
+確実に失敗させる。実UID rootでの実行下でも、パーミッションに関係なく
+カーネルが返すエラーのため決定論的に失敗する)。`umount`モック側は、
+このディレクトリを`rmdir`で安全に取り除いてから後始末する。
+
 `kill`は初回PRのsandbox binに意図的に配置していない。GUI本体の`kill`
 呼び出し (進捗ダイアログの後始末) はいずれも`2>/dev/null || :`で
 保護されており、コマンド不在 (`exit 127`) も許容される設計であることを
@@ -122,11 +144,29 @@ productionソースで確認済みである。テストドライバ自身がシ�
 sandbox内へコピーしてから、そのsandbox内パスをモックの環境変数
 (`MOCK_ALL_ROWS_FILE`等) へ渡す。
 
-## 今回 (初回PR) の範囲
+## 対応範囲
 
-シナリオはGUI 13件・helper 7件、既存・信頼済みの回帰観点に限定している。
-フル終了コードマトリクス、TOCTOU窓別テスト、シグナル処理一式、
-`extract_field`のエッジケース単体テスト等は後続PRへ分離する。
+初回PRのシナリオはGUI 13件・helper 7件、既存・信頼済みの回帰観点に
+限定していた (`test_gui.sh`/`test_helper.sh`、計20シナリオ・
+52アサーション、以後変更しない)。
+
+`test_helper_failure_matrix.sh` (後続PR) は、helperの公開終了コード
+2, 10, 14, 15, 20〜25, 70, 71 に対する決定論的な失敗マトリクスを追加する
+(11・12・13・16は`test_helper.sh`で既に回帰済みのため対象外)。
+51シナリオ・258アサーションで構成される (この数値は手作業の数え上げ
+ではなく、`test_helper_failure_matrix.sh`自身の実行結果の末尾
+`SCENARIOS=51 PASS=258 FAIL=0`行に基づく。シナリオ数はスクリプト内の
+自己申告カウンタ`SCENARIO_COUNT`が実際の呼び出し回数を集計したもので
+あり、実行環境 [root/非root等] に依存する分岐は持たない)。各ケースで
+終了コード・対応する日本語stderr・破壊的モックへの到達/未到達・lock/
+mount/一時ディレクトリの後始末・cleanup失敗が既存の終了コードを上書き
+しないことを検証する。シグナル (129/130/143) およびTOCTOU窓別の実時間
+競合テストは対象外とする (決定論的なモックだけでは再現できないため)。
+一部のfail()分岐 (production上defensiveで他の分岐と独立に再現できない
+ものなど) はテストファイル冒頭のコメントに理由とともに明記したうえで
+意図的に省略している。
+
+`extract_field`のエッジケース単体テスト等は今後の課題とする。
 
 ## CIへの組み込み
 

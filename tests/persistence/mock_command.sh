@@ -6,13 +6,21 @@
 #
 # 3分類:
 #   1) 読み取り専用パススルー: 実バイナリを無条件でexecする。
-#      awk grep sed cut ls tail sleep
+#      awk grep sed cut tail sleep
 #   2) sandbox制限ラッパー: 対象パスがsandbox配下であることを確認した
 #      うえで実バイナリへ委譲する。sandbox外を指す場合は exit 99。
-#      mkdir rmdir rm cat mktemp
+#      mkdir rmdir rm cat mktemp ls
 #   3) 完全モック: 実バイナリを一切execしない。
 #      lsblk findmnt id stat parted mkfs.ext4 mount umount partprobe
 #      udevadm wipefs sudo yad sync
+#
+# ls は本来ただの読み取り専用パススルーだが、失敗マトリクス
+# (test_helper_failure_matrix.sh) がcheck_holders_emptyの
+# `ls -A .../holders` 失敗経路 (終了コード14) を、実UID・パーミッションに
+# 依存せず決定論的に再現できるよう、既定値0のopt-in環境変数
+# (MOCK_FAIL_LS_HOLDERS) による失敗注入だけを追加した2分類側のラッパーと
+# する (chmod 000等のパーミッション操作はharnessがroot実行された場合に
+# 無力化されるため使わない)。
 #
 # 初回PRでは kill を意図的に配置しない (GUI本体のkill呼び出しは
 # "2>/dev/null || :" で保護されており、コマンド不在 [exit 127] も
@@ -25,7 +33,7 @@ set -eu
 
 # passthrough_allowlist: このリストに無いコマンド名は write_mocks が
 # 自動でpassthrough化しない (項目9)。
-PASSTHROUGH_ALLOWLIST='awk grep sed cut ls tail sleep'
+PASSTHROUGH_ALLOWLIST='awk grep sed cut tail sleep'
 
 write_mocks() {
     # write_mocks SANDBOX
@@ -71,7 +79,7 @@ exec /usr/bin/mkdir "\$@"
 EOF
     chmod +x "$bin/mkdir"
 
-    for cmd in rmdir rm; do
+    for cmd in rm; do
         cat > "$bin/$cmd" <<EOF
 #!/bin/sh
 SANDBOX='$sandbox'
@@ -99,6 +107,53 @@ exec /usr/bin/$cmd "\$@"
 EOF
         chmod +x "$bin/$cmd"
     done
+
+    # rmdirは、失敗マトリクス (後始末失敗の再現) 用に、自身のロック
+    # ディレクトリ・一時マウントディレクトリのそれぞれに対してだけ、
+    # 明示的なopt-in環境変数 (MOCK_FAIL_RMDIR_LOCK/MOCK_FAIL_RMDIR_MNT、
+    # いずれも既定値0) が'1'の場合にのみ失敗を注入する。両方とも未設定
+    # (既定) の場合の挙動は、rm/mkdir等と同じsandbox制限ラッパー
+    # (実rmdirへ委譲) のままであり、既存シナリオへの影響はない。
+    cat > "$bin/rmdir" <<EOF
+#!/bin/sh
+SANDBOX='$sandbox'
+past_dd=0
+for a in "\$@"; do
+    if [ "\$past_dd" -eq 1 ]; then
+        case "\$a" in
+            "\$SANDBOX"/*) ;;
+            *) echo "mock rmdir: REFUSING path outside sandbox: \$a" >&2; exit 99 ;;
+        esac
+        case "\$a" in
+            */mypocketos-persistence-setup-helper.lock)
+                if [ "\${MOCK_FAIL_RMDIR_LOCK:-0}" = '1' ]; then
+                    echo "mock rmdir: injected failure (lock dir): \$a" >&2
+                    exit 1
+                fi
+                ;;
+            */mypocketos-persistence-setup-helper.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9])
+                if [ "\${MOCK_FAIL_RMDIR_MNT:-0}" = '1' ]; then
+                    echo "mock rmdir: injected failure (mnt dir): \$a" >&2
+                    exit 1
+                fi
+                ;;
+        esac
+    fi
+    case "\$a" in
+        --) past_dd=1 ;;
+        --*) ;;
+        -*) ;;
+        *)
+            case "\$a" in
+                "\$SANDBOX"/*) ;;
+                *) echo "mock rmdir: REFUSING path outside sandbox: \$a" >&2; exit 99 ;;
+            esac
+            ;;
+    esac
+done
+exec /usr/bin/rmdir "\$@"
+EOF
+    chmod +x "$bin/rmdir"
 
     # /proc/cmdline・/proc/swapsへの特殊応答は、ファイル引数が正確に1件
     # (他の引数・オプションを伴わない) の場合だけ許可する。余分な引数・
@@ -132,6 +187,20 @@ if [ "\$#" -eq 1 ]; then
                 printf '%s\n' "\$MOCK_SWAP_LINE"
             fi
             exit 0
+            ;;
+    esac
+fi
+if [ "\$#" -eq 2 ] && [ "\$1" = '--' ]; then
+    case "\$2" in
+        */persistence.conf)
+            if [ -n "\${MOCK_FAKE_CONF_CONTENT:-}" ]; then
+                case "\$2" in
+                    "\$SANDBOX"/*) ;;
+                    *) echo "mock cat: REFUSING path outside sandbox: \$2" >&2; exit 99 ;;
+                esac
+                printf '%s' "\$MOCK_FAKE_CONF_CONTENT"
+                exit 0
+            fi
             ;;
     esac
 fi
@@ -186,6 +255,48 @@ esac
 printf '%s\n' "\$result"
 EOF
     chmod +x "$bin/mktemp"
+
+    # lsは通常はsandbox制限ラッパー (実lsへ委譲) だが、対象が".../holders"
+    # で終わり、かつ既定値0のopt-in環境変数 MOCK_FAIL_LS_HOLDERS が'1'の
+    # 場合だけ、実lsを一切呼ばずに失敗を注入する (実UID root下でも
+    # パーミッションに依存せず決定論的に失敗させるため)。
+    cat > "$bin/ls" <<EOF
+#!/bin/sh
+SANDBOX='$sandbox'
+past_dd=0
+target=''
+for a in "\$@"; do
+    if [ "\$past_dd" -eq 1 ]; then
+        case "\$a" in
+            "\$SANDBOX"/*) ;;
+            *) echo "mock ls: REFUSING path outside sandbox: \$a" >&2; exit 99 ;;
+        esac
+        target="\$a"
+    fi
+    case "\$a" in
+        --) past_dd=1 ;;
+        --*) ;;
+        -*) ;;
+        *)
+            case "\$a" in
+                "\$SANDBOX"/*) ;;
+                *) echo "mock ls: REFUSING path outside sandbox: \$a" >&2; exit 99 ;;
+            esac
+            target="\$a"
+            ;;
+    esac
+done
+case "\$target" in
+    */holders)
+        if [ "\${MOCK_FAIL_LS_HOLDERS:-0}" = '1' ]; then
+            echo "mock ls: injected failure (holders): \$target" >&2
+            exit 1
+        fi
+        ;;
+esac
+exec /usr/bin/ls "\$@"
+EOF
+    chmod +x "$bin/ls"
 
     # mock-kill: 完全モック。実killは一切実行せず、実プロセスへシグナルを
     # 送らない。instrument_gui.sh が production の kill 呼び出しを、この
@@ -484,6 +595,24 @@ exit 0
 EOF
     chmod +x "$bin/wipefs"
 
+    # MOCK_CONF_PATH_IS_DIR: persistence.confの書き込み失敗
+    # (helper側の終了コード24) を決定論的に再現するためのフック。
+    # パーミッション (chmod) による再現は、harnessが実UIDrootで動く場合に
+    # 書き込みが成功してしまい非決定的になるため使わない。代わりに、
+    # helper本体が持つ変数が指す予定の位置 (マウント先ディレクトリ直下の
+    # persistence.conf) へ、helper本体が書き込む前に空ディレクトリを
+    # 作っておく。そこへのファイル書き込み (printfによるリダイレクト) は
+    # EISDIR (書き込み先がディレクトリ) で失敗し、これはUID・パーミッ
+    # ションに関係なくカーネルが返すエラーであるため、root実行下でも
+    # 確実に失敗する。
+    #
+    # 注意 (このブロック配下のheredocは全て非quoted <<EOF であり、
+    # コメント行であっても書いたドル記号付きの変数参照はモック本体では
+    # なくwrite_mocks自身のこのシェルで展開される): heredocの本文中に
+    # このスクリプト (write_mocks) が知らない変数名をドル記号付きで
+    # 書かないこと。書くと、その変数が未定義である限りwrite_mocks自体が
+    # "parameter not set" エラーを出す (dashでは即座の異常終了とは
+    # 限らないため、この種の書き間違いはPASS表示に紛れて見逃されやすい)。
     cat > "$bin/mount" <<EOF
 #!/bin/sh
 : > "$sandbox/work/mount-called"
@@ -492,6 +621,9 @@ shift
 shift
 dst="\$1"
 printf '%s' "\$dst" > "$sandbox/work/mount-state"
+if [ "\${MOCK_CONF_PATH_IS_DIR:-0}" = '1' ]; then
+    mkdir -- "\$dst/persistence.conf" 2>/dev/null || :
+fi
 exit 0
 EOF
     chmod +x "$bin/mount"
@@ -504,15 +636,19 @@ shift
 target="\$1"
 state="\$(cat "$sandbox/work/mount-state" 2>/dev/null)" || state=''
 if [ "\$state" = "\$target" ]; then
-    # umount (アンマウント) によって内容が失われる前に、検証用の退避
-    # コピーをsandbox/workへ保存しておく。cp はこのモックのPATH (sandbox
-    # binのみ) に存在しないため、sandbox化済みの cat モック + シェルの
-    # リダイレクト (外部コマンドを要しない) で退避する。
-    if [ -e "\$target/persistence.conf" ]; then
+    if [ -d "\$target/persistence.conf" ] && [ ! -L "\$target/persistence.conf" ]; then
+        # MOCK_CONF_PATH_IS_DIRが作った注入用の空ディレクトリを取り除く
+        # (中身は作っていないため常に空のはず、rmdirで十分)。
+        rmdir -- "\$target/persistence.conf" 2>/dev/null || :
+    elif [ -e "\$target/persistence.conf" ]; then
+        # umount (アンマウント) によって内容が失われる前に、検証用の退避
+        # コピーをsandbox/workへ保存しておく。cp はこのモックのPATH
+        # (sandbox binのみ) に存在しないため、sandbox化済みの cat モック +
+        # シェルのリダイレクト (外部コマンドを要しない) で退避する。
         cat -- "\$target/persistence.conf" > "$sandbox/work/persistence.conf.snapshot" 2>/dev/null || :
+        rm -f "\$target/persistence.conf" 2>/dev/null || :
     fi
     : > "$sandbox/work/mount-state"
-    rm -f "\$target/persistence.conf" 2>/dev/null || :
 fi
 exit 0
 EOF

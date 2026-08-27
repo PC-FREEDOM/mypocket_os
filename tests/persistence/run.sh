@@ -37,6 +37,15 @@ fi
 
 echo
 echo "############################################"
+echo "# helper failure-matrix test suite"
+echo "############################################"
+sh "$TESTS_DIR/test_helper_failure_matrix.sh" && matrix_rc=0 || matrix_rc=$?
+if [ "$matrix_rc" -ne 0 ]; then
+    overall_rc=1
+fi
+
+echo
+echo "############################################"
 echo "# production integrity (post-run)"
 echo "############################################"
 POST_SHA_RUN="$(sha256sum "$PROD_GUI" "$PROD_HELPER")"
@@ -48,5 +57,5 @@ else
 fi
 
 echo
-echo "GUI suite exit=$gui_rc / helper suite exit=$helper_rc / overall=$overall_rc"
+echo "GUI suite exit=$gui_rc / helper suite exit=$helper_rc / failure-matrix suite exit=$matrix_rc / overall=$overall_rc"
 exit "$overall_rc"
