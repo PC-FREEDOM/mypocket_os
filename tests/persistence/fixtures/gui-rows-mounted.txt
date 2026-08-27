@@ -1,0 +1,1 @@
+NAME="fakedisk" KNAME="fakedisk" PATH="/dev/fakedisk" MAJ:MIN="259:0" TYPE="disk" SIZE="17179869184" RO="0" RM="1" HOTPLUG="1" MOUNTPOINTS="/mnt/somewhere" FSTYPE="" PTTYPE="" LABEL="" PARTLABEL="" PKNAME="" MODEL="Fake Disk" SERIAL="FAKE123" TRAN="usb"
