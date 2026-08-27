@@ -1,0 +1,2 @@
+NAME="fakedisk" TYPE="disk" MOUNTPOINTS=""
+NAME="fakedisk1" TYPE="part" MOUNTPOINTS=""

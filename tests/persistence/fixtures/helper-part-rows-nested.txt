@@ -1,0 +1,1 @@
+NAME="fakedisk1" PATH="__FAKE_PART_PATH__/nested" TYPE="part" PKNAME="fakedisk" MAJ:MIN="259:1"
