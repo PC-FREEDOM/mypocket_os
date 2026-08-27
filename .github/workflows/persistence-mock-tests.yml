@@ -1,0 +1,106 @@
+name: Persistence GUI/helper mock tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persistence-mock-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  persistence-mock-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # このジョブは既存の static-checks ワークフローとは別ファイル・
+      # 別ジョブであり、実行環境 (ランナーVM) を共有しない。そのため
+      # 必要なコマンドの確認・導入はこのワークフロー自身の中で完結させる。
+      # 一覧は tests/persistence/*.sh (ドライバスクリプト本体、および
+      # mock_command.sh が生成するモックのpassthrough/ラッパー階層) を
+      # 実際に検索して確定したものである。
+      - name: Verify required tools
+        run: |
+          set -euo pipefail
+
+          need_dash=0
+          for cmd in \
+            sh dash env sha256sum mktemp mkdir rmdir rm chmod cp mv \
+            sed grep awk cut ls tail sleep find wc dirname
+          do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              if [ "$cmd" = 'dash' ]; then
+                need_dash=1
+              else
+                echo "unexpected missing tool: $cmd" >&2
+                exit 1
+              fi
+            fi
+          done
+
+          if [ "$need_dash" -eq 1 ]; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends dash
+            command -v dash >/dev/null 2>&1 || {
+              echo "dash still missing after install" >&2
+              exit 1
+            }
+          fi
+
+      - name: Capture production checksums (pre)
+        run: |
+          set -euo pipefail
+          sha256sum \
+            config/includes.chroot/usr/local/bin/mypocketos-persistence-setup \
+            config/includes.chroot/usr/local/libexec/mypocketos-persistence-setup-helper \
+            > /tmp/persistence-prod.sha256.pre
+
+      - name: Run persistence mock test suite
+        run: sh tests/persistence/run.sh
+
+      - name: Verify repository integrity
+        if: always()
+        run: |
+          # 意図的に "set -e" を使わない: 個々の検査 (SHA256・git diff・
+          # git diff --cached・git status) はどれか1つが失敗しても、
+          # 残りの検査を必ず全て実行し、まとめて報告する。integrity_rc
+          # へ失敗を集約し、最後にその値でジョブを失敗させる。
+          set -uo pipefail
+
+          integrity_rc=0
+
+          if ! sha256sum -c /tmp/persistence-prod.sha256.pre; then
+            echo 'production GUI/helper SHA-256 mismatch' >&2
+            integrity_rc=1
+          fi
+
+          if ! git diff --exit-code; then
+            echo 'unexpected unstaged changes (git diff)' >&2
+            integrity_rc=1
+          fi
+
+          if ! git diff --cached --exit-code; then
+            echo 'unexpected staged changes (git diff --cached)' >&2
+            integrity_rc=1
+          fi
+
+          status_output="$(git status --porcelain)"
+          if [ -n "$status_output" ]; then
+            echo 'unexpected working-tree changes (git status --porcelain):' >&2
+            echo "$status_output" >&2
+            integrity_rc=1
+          fi
+
+          exit "$integrity_rc"
