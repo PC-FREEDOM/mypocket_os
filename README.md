@@ -976,3 +976,145 @@ TPMは接続なし) を用意して使用した。いずれのVMにも次のみ�
   変更、複数の永続領域の作成・切り替え、`/home`以外の永続化、追加
   インストールしたアプリ本体の永続化 (いずれも「初版のスコープ外」節
   参照)。
+
+## USB persistence IMG生成 (試作)
+
+`scripts/build-usb-persistence-image.sh` は、通常の`live-image-amd64.hybrid.iso`
+とは**別成果物**として、単一のGPT/MBR/APM/El Toritoハイブリッド構造に
+persistence用の第3パーティション (ext4, LABEL=`persistence`,
+`persistence.conf`の内容は`/home`) をあらかじめ追加したIMGファイルを、
+単一のxorriso生成処理で作る試作スクリプトである。「Live永続化基盤」
+「GUIによる永続領域作成」節が前提とする、Live起動中にGUI/helperで
+外部の別ディスクへ永続領域を作成する経路とは別に、**1本のUSBメモリだけで
+起動と永続化を両立させる**ことを目的とする。
+
+### 使い方
+
+```sh
+scripts/build-usb-persistence-image.sh \
+    --iso live-image-amd64.hybrid.iso \
+    --binary-dir binary \
+    --persistence-size 2G \
+    --output MyPocketOS-usb-persistence.img
+```
+
+4引数はすべて必須であり、既定値は設けていない。`--persistence-size`は
+`256M`/`2G`のような形式のみを許可し (K単位・小数・大文字M/G以外の単位は
+不可)、**最小256M**とする。出力ファイルサイズの公開既定値はまだ決めて
+いない。`--output`は既存パス (symlink含む) を一切上書きしない。
+
+### 出力の公開方式 (競合安全性)
+
+最終出力は、`--output`と同じディレクトリ内に作る**private work
+directory** (`mktemp -d`、作成直後にmode 0700を検証) の中へ固定名で
+生成し、生成後自動検証がすべて成功した場合にのみ、同一ファイルシステム
+内の**hard link** (`ln`、`-f`なし) で公開する。`ln`は`--output`が既に
+存在すれば失敗する (exit 60) ため、TOCTOU的な上書きが構造上起こらない。
+公開成功後、work directory内の一時コピーは削除する (hard linkのため
+公開済みファイルのデータには影響しない)。`mv`/`mv -f`/`mv -n`は最終公開に
+使わない。
+
+hard link方式であることから、**`--output`の親ファイルシステムは通常
+ファイルのhard linkをサポートしている必要がある**(work directoryも同じ
+親ディレクトリ内に作るため、同一ファイルシステム内hard linkとなる)。
+FAT系等、hard linkをサポートしないファイルシステムを`--output`の親に
+指定した場合、生成後自動検証まではすべて成功したうえで、**最終公開の
+`ln`だけがexit 60で失敗する**(`--output`が既に存在する場合と同じ終了
+コードを共有するが、原因はhard link非対応であり上書きではない)。
+いずれの場合も、既存出力を上書きしない安全設計 (`ln`に`-f`を使わない)
+は維持される。
+
+### 空き容量検査
+
+xorriso/mke2fs等の実行前に、`--output`の親ディレクトリのファイル
+システムについて、次の合計が空き容量以内であることを検査する
+(超過時はexit 19で拒否する)。
+
+```
+ISOサイズ + persistenceサイズ×3 (生成途中の最終IMG分・persistence.img分・
+検証用抽出分) + binary/live/filesystem.squashfsのサイズ (入力整合性検査での
+一時抽出分) + 安全余白 (16MiB)
+```
+
+この判定は、加算した合計を上限と比較するのではなく、上限から毎回減算
+しながら判定する (`fits_within`)。極端に大きい値の組み合わせによる
+整数演算のオーバーフローで、上限検査そのものが回避されることを防ぐ
+ためである。合計サイズ上限 (8,000,000,000 bytes) の検査も同じ関数で
+行う。
+
+### 制限事項
+
+- **8GB未満の保守的な上限**: 入力ISOサイズ + `--persistence-size` +
+  安全余白 (8MiB) の合計が **8,000,000,000 bytes を超える指定は、
+  xorriso実行前に拒否**する (exit 18)。これは現時点の暫定的な保守値
+  であり、将来的な緩和を妨げるものではない。
+- **現状は再現可能ビルドではない**: 生成されるIMGのGPT disk
+  GUID・各パーティションGUID・ext4 UUID等は実行のたびに変化する
+  (xorrisoが実行時刻や乱数を基に生成するため)。同一入力から常に
+  バイト同一の出力を得られることは、現時点では保証していない。
+- 入力ISOと`binary/`ソースツリーの整合性は、`isolinux/isolinux.bin`・
+  `boot/grub/efi.img`・`live/filesystem.squashfs`の3ファイルについてのみ
+  検証する。`isolinux.bin`は`-boot-info-table`によりbytes 8-63が
+  意図的に書き換えられるため、この範囲を除いた完全一致を条件とする。
+
+### 動作確認の範囲
+
+実装過程で、実ISO・実`binary/`ツリーに対して本スクリプトを実際に実行し、
+以下を確認済みである。
+
+- xorriso単一生成が成功すること (exit 0)。
+- 生成物のMBR partition 1 (status/type/start)・partition 2
+  (status/type/start/blocksが入力ISOと完全一致)・partition 3
+  (status/type/start/blocks、partition 1に連続・非重複)、GPT entry 1が
+  MBR partition 1と整合、GPT entry 2 (start/size/type GUID/nameが入力ISO
+  と完全一致)・entry 3 (start/size/type GUID/name)、GPT backup headerが
+  出力ファイル末尾LBAにあり出力ファイルサイズが512の倍数であること、
+  El Toritoが入力ISOと完全一致すること、ISO9660が読み取れることを確認。
+- partition 3を抽出し、`persistence.img`とのcmp完全一致・`e2fsck -fn`の
+  異常なし・`persistence.conf`のUID/GID/mode/size/内容が想定どおりで
+  あることを、いずれも実xorriso・実e2fsprogsで確認済み。
+- 入力ISO・`binary/`主要3ファイルが実行前後で変化しないこと。
+- 出力先が既に存在する場合に上書きせず拒否すること (exit 13)、
+  private work directoryが成功後に削除されること。
+- `tests/usb-persistence-image/`のテスト (直接実行29シナリオ+モック59
+  シナリオ=計88シナリオ・94アサーション、モック側は実xorriso/mke2fs/
+  e2fsck/debugfsを呼ばない) で、各wrapper/mockのsandbox外パス拒否、
+  生成後自動検証の代表的な失敗経路 (MBR/GPT欠落・重複、entry不一致、
+  backup header不一致、El Torito不一致、ISO9660欠落、partition 3不一致、
+  実行中の入力変化検出等)、公開直前競合 (exit 60、競合相手を上書き
+  しないこと含む)、INT/TERM/HUPの各シグナルで確実に非0終了することを
+  確認済み。
+
+**プロトタイプIMGによるVM実地検証 (正式スクリプト完成前)**
+
+以下は、正式スクリプト (`scripts/build-usb-persistence-image.sh`)
+完成前に、同等の単一xorriso生成方式 (`-append_partition 3`を用いた
+手動コマンド列) で作成した**試作IMG**を対象に、開発用QEMU/KVM VM上で
+実施した検証結果である。**正式スクリプトが生成した最終成果物そのものを
+VM起動して検証したものではない**ことに注意 (両者は同一の生成方式に
+基づくが、別の実行・別の生成物である)。
+
+- BIOS VMで、通常Live・Persistenceの両方の起動に成功した。
+- BIOS Persistenceでは、`/home`が`/dev/vda3[/home]`からマウントされる
+  ことを確認した。
+- BIOS Persistenceで作成したファイルは、再起動後も保持されることを
+  確認した。
+- BIOS通常Live (Persistenceでない) では、永続化したファイルが表示され
+  ず、partition 3がマウントされないことを確認した。
+- UEFI VMで起動に成功した。
+- UEFI環境でSecure Boot関連のEFI変数の値が1であることを確認した。
+- UEFI Persistenceでは、`/home`が`/dev/vda3[/home]`からマウントされる
+  ことを確認した。
+- UEFI Secure Boot環境で、再起動後もファイルが保持されることを確認した。
+- UEFI通常Live (Persistenceでない) では、永続化したファイルが表示され
+  ず、partition 3がマウントされないことを確認した。
+
+**次の項目は未確認である。**
+
+- 現在の正式スクリプトが生成した成果物そのものについての、上記と同様の
+  VM実地検証 (未実施)。
+- 実USBメモリへの書き込み。
+- 実機BIOS/UEFI起動。
+
+上記「Live永続化基盤」節で行ったVM実地検証 (GUI/helperによる外部ディスク
+永続化) とは対象が異なり、混同しないこと。
