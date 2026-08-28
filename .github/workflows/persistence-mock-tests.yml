@@ -25,36 +25,68 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # このジョブは既存の static-checks ワークフローとは別ファイル・
-      # 別ジョブであり、実行環境 (ランナーVM) を共有しない。そのため
-      # 必要なコマンドの確認・導入はこのワークフロー自身の中で完結させる。
-      # 一覧は tests/persistence/*.sh (ドライバスクリプト本体、および
-      # mock_command.sh が生成するモックのpassthrough/ラッパー階層) を
-      # 実際に検索して確定したものである。
+      # tests/persistence/ (GUI/helper) と tests/usb-persistence-image/
+      # (build-usb-persistence-image.sh) の両モックスイートを、同一ジョブ
+      # 内のステップとして順に実行する。ブランチ保護の必須contextである
+      # "persistence-mock-tests" が両方をカバーするようにするため、別
+      # ジョブへは分離しない。必要なコマンドの一覧は、両ディレクトリの
+      # *.sh (ドライバスクリプト本体、および各mock_command.shが生成する
+      # モック/パススルー階層) を実際に検索して確定したものである。
+      # xorriso・e2fsprogs (mke2fs/e2fsck/debugfs) は、production
+      # スクリプト (scripts/build-usb-persistence-image.sh) 自身の
+      # check_required_commandsが起動直後に存在検査を行うため必要となる
+      # (test_direct.shの全シナリオはこの存在検査より後、実際のIMG生成
+      # には到達する前にexitする設計であり、test_direct.sh自体はIMG生成
+      # を一切行わない。詳細はtests/usb-persistence-image/README.md参照)。
+      # timeoutはtests/usb-persistence-image/test_mocked.sh のシグナル
+      # テストで使用する。tr・truncateはtests/usb-persistence-image/
+      # mock_command.sh内のxorriso/mke2fsモックが、絶対パスで直接
+      # 呼び出す実コマンドとして使用する。
       - name: Verify required tools
         run: |
           set -euo pipefail
 
           need_dash=0
+          need_xorriso=0
+          need_e2fsprogs=0
           for cmd in \
             sh dash env sha256sum mktemp mkdir rmdir rm chmod cp mv \
-            sed grep awk cut ls tail sleep find wc dirname
+            sed grep awk cut ls tail sleep find wc dirname \
+            stat dd cmp diff realpath ln df timeout head cat tr truncate
           do
             if ! command -v "$cmd" >/dev/null 2>&1; then
-              if [ "$cmd" = 'dash' ]; then
-                need_dash=1
-              else
-                echo "unexpected missing tool: $cmd" >&2
-                exit 1
-              fi
+              case "$cmd" in
+                dash) need_dash=1 ;;
+                *)
+                  echo "unexpected missing tool: $cmd" >&2
+                  exit 1
+                  ;;
+              esac
             fi
           done
 
-          if [ "$need_dash" -eq 1 ]; then
+          command -v xorriso >/dev/null 2>&1 || need_xorriso=1
+          command -v mke2fs >/dev/null 2>&1 || need_e2fsprogs=1
+
+          if [ "$need_dash" -eq 1 ] || [ "$need_xorriso" -eq 1 ] || [ "$need_e2fsprogs" -eq 1 ]; then
             sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends dash
+            pkgs=''
+            [ "$need_dash" -eq 1 ] && pkgs="$pkgs dash"
+            [ "$need_xorriso" -eq 1 ] && pkgs="$pkgs xorriso"
+            [ "$need_e2fsprogs" -eq 1 ] && pkgs="$pkgs e2fsprogs"
+            # shellcheck disable=SC2086
+            sudo apt-get install --yes --no-install-recommends $pkgs
+
             command -v dash >/dev/null 2>&1 || {
               echo "dash still missing after install" >&2
+              exit 1
+            }
+            command -v xorriso >/dev/null 2>&1 || {
+              echo "xorriso still missing after install" >&2
+              exit 1
+            }
+            command -v mke2fs >/dev/null 2>&1 || {
+              echo "mke2fs (e2fsprogs) still missing after install" >&2
               exit 1
             }
           fi
@@ -65,10 +97,14 @@ jobs:
           sha256sum \
             config/includes.chroot/usr/local/bin/mypocketos-persistence-setup \
             config/includes.chroot/usr/local/libexec/mypocketos-persistence-setup-helper \
+            scripts/build-usb-persistence-image.sh \
             > /tmp/persistence-prod.sha256.pre
 
-      - name: Run persistence mock test suite
+      - name: Run persistence GUI/helper mock test suite
         run: sh tests/persistence/run.sh
+
+      - name: Run USB persistence image mock test suite
+        run: sh tests/usb-persistence-image/run.sh
 
       - name: Verify repository integrity
         if: always()
@@ -82,7 +118,7 @@ jobs:
           integrity_rc=0
 
           if ! sha256sum -c /tmp/persistence-prod.sha256.pre; then
-            echo 'production GUI/helper SHA-256 mismatch' >&2
+            echo 'production GUI/helper/script SHA-256 mismatch' >&2
             integrity_rc=1
           fi
 
