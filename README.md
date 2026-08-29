@@ -84,6 +84,32 @@ Debian 13 (trixie) 上で live-build を使い、ISOイメージをビルドし�
   現時点では正常に機能しません。日本語でのメニュー表示、およびカテゴリからのアプリ
   起動には影響しません。
 
+### Standard版の追加アプリ
+
+Base版の構成に加えて、Standard版では次のアプリを追加します。
+
+- Firefox ESR (日本語UI)
+- LibreOffice Writer / Calc / Impress / Draw (GTK3統合、日本語UI・日本語ヘルプ付き)
+- GNOME Drawing (描画ツール)
+
+パッケージ定義は `config/package-lists/mypocketos-standard.list.chroot` に
+まとめています。Firefox・LibreOffice・DrawingはいずれもDebian 13 (trixie)
+のパッケージを使用しています。
+
+GIMP・Inkscape・動画編集・音楽制作・Blenderは、今回のStandard版には
+含めていません。将来のCreator系構成の候補です。
+
+**実測ビルド結果 (検証ビルド時点)**
+
+Standard版パッケージを追加した状態で `./scripts/build.sh` を実行し、
+次を確認しました。
+
+- ISOサイズ: 1,782,890,496 bytes
+- Base版ISOからの増加: 355,549,184 bytes (約339.1 MiB)
+- ISO SHA-256 (今回の検証ビルドで得られた値であり、配布物を長期的に
+  保証する固定値ではありません):
+  `f413398f9895b475b7c5516fca1ca15e9d343c670a0eafca9a0cf9db160a45f6`
+
 ## Live環境のログイン
 
 MyPocketOSのLive環境は、通常起動時にlive-configの自動ログイン機能により
@@ -1118,3 +1144,20 @@ VM起動して検証したものではない**ことに注意 (両者は同一�
 
 上記「Live永続化基盤」節で行ったVM実地検証 (GUI/helperによる外部ディスク
 永続化) とは対象が異なり、混同しないこと。
+
+### Standard版アプリ搭載イメージでのUSB persistence検証 (2026-08-29)
+
+Standard版パッケージ (Firefox ESR・LibreOffice・Drawing) を含むISOから、
+`--persistence-size 2G` を指定してUSB persistence IMGを生成し、開発用
+QEMU/KVM VM上で次を確認しました。
+
+- IMGサイズ: 3,930,710,016 bytes (persistence領域2GiB)。
+- BIOS起動に成功。
+- UEFI Secure Boot環境での起動に成功。
+- LibreOffice Writerで作成した文書が、再起動後もSHA-256完全一致で
+  保持されることを確認。
+- 通常Live (`nopersistence`) では永続化したファイルが表示されず、
+  persistenceパーティションもマウントされないことを確認。
+
+上記の検証結果を踏まえ、この構成 (Standard版 + USB persistence 2GiB) の
+配布媒体には、**8GB以上のUSBメモリを推奨**します。

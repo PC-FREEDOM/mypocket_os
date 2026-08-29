@@ -1,0 +1,19 @@
+# MyPocketOS - Standard版 追加パッケージリスト
+# 各パッケージは Debian 13 (trixie) の main に
+# 存在することを apt-cache policy で確認済み。
+
+# ---- Webブラウザ (Firefox ESR) ----
+firefox-esr
+firefox-esr-l10n-ja
+
+# ---- オフィススイート (LibreOffice 主要機能) ----
+libreoffice-writer
+libreoffice-calc
+libreoffice-impress
+libreoffice-draw
+libreoffice-gtk3
+libreoffice-l10n-ja
+libreoffice-help-ja
+
+# ---- 描画ツール (GNOME Drawing) ----
+drawing
