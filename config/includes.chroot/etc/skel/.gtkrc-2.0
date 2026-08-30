@@ -1,0 +1,6 @@
+# MyPocketOS - GTK2 既定設定
+#
+# GTK3側 (~/.config/gtk-3.0/settings.ini) と同じ理由・同じ範囲で、
+# アイコンテーマのみをMyPocketOSへ設定する。GTKテーマは変更しない。
+
+gtk-icon-theme-name="MyPocketOS"

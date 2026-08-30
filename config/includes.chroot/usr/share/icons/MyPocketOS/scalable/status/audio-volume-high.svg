@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MyPocketOS original icon (not derived from MyPocketOS-Fluent-yellow). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path fill="#f2f2f2" d="M10,5 L6,9 L2,9 L2,15 L6,15 L10,19 Z"/>
+  <path fill="none" stroke="#f2f2f2" stroke-width="2.2" stroke-linecap="round"
+        d="M13,9 Q15.5,12 13,15"/>
+  <path fill="none" stroke="#f2f2f2" stroke-width="2.2" stroke-linecap="round"
+        d="M16,6.5 Q19.5,12 16,17.5"/>
+  <path fill="none" stroke="#f2f2f2" stroke-width="2.2" stroke-linecap="round"
+        d="M19,4 Q23,12 19,20"/>
+</svg>

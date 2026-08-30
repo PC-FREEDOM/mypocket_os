@@ -9,6 +9,7 @@
 # (実際に jgmenu-apps で生成し、この内容が末尾に含まれることを確認済み)
 
 永続領域を作成,mypocketos-persistence-setup
+Openbox再設定,openbox --reconfigure
 
 ^sep()
 電源・セッション,^checkout(power)

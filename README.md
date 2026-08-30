@@ -91,9 +91,11 @@ Base版の構成に加えて、Standard版では次のアプリを追加しま�
 - Firefox ESR (日本語UI)
 - LibreOffice Writer / Calc / Impress / Draw (GTK3統合、日本語UI・日本語ヘルプ付き)
 - GNOME Drawing (描画ツール)
+- Mousepad (テキストエディタ)
+- Galculator (電卓)
 
 パッケージ定義は `config/package-lists/mypocketos-standard.list.chroot` に
-まとめています。Firefox・LibreOffice・DrawingはいずれもDebian 13 (trixie)
+まとめています。Firefox・LibreOffice・Drawing・Mousepad・GalculatorはいずれもDebian 13 (trixie)
 のパッケージを使用しています。
 
 GIMP・Inkscape・動画編集・音楽制作・Blenderは、今回のStandard版には
@@ -110,13 +112,108 @@ Standard版パッケージを追加した状態で `./scripts/build.sh` を実�
   保証する固定値ではありません):
   `f413398f9895b475b7c5516fca1ca15e9d343c670a0eafca9a0cf9db160a45f6`
 
+### アイコンテーマ (MyPocketOS-Fluent-yellow)
+
+既定のGTKアイコンテーマは、`MyPocketOS`という薄い継承テーマ
+(`/usr/share/icons/MyPocketOS/index.theme`、
+`Inherits=MyPocketOS-Fluent-yellow,Adwaita,hicolor`) を介して選択して
+います (`~/.config/gtk-3.0/settings.ini`・`~/.gtkrc-2.0`の
+`gtk-icon-theme-name`)。**`MyPocketOS-Fluent-yellow`は、upstream
+「Fluent Icon Theme」の完全版ではなく、MyPocketOS向けに固定サイズ・
+HiDPI等を除いた派生サブセットです。** MyPocketOS独自のアイコンを
+追加する場合は、この派生サブセット本体を直接改変せず、`MyPocketOS`
+テーマ側にのみ追加する方針です。Adwaitaへ戻す場合は、上記2ファイルの
+`gtk-icon-theme-name`を`Adwaita`へ書き換えるだけで戻せます。GTKテーマ・
+ウィンドウ装飾・Openboxテーマは変更していません。
+
+**Git管理方式 (単一tar.gzアーカイブ + live-build hookでのオフライン展開)**
+
+`MyPocketOS-Fluent-yellow`は、12,000ファイル超を展開した状態でGit管理
+するのではなく、単一の再現可能な`tar.gz`として
+`config/includes.chroot/usr/share/mypocketos/icon-themes/MyPocketOS-Fluent-yellow.tar.gz`
+にコミットしています。ビルド時、live-build hook
+(`config/hooks/normal/mypocketos-fluent-icon-theme.hook.chroot`)
+が以下を行います。
+
+1. アーカイブの存在確認
+2. SHA-256検証 (hook内に埋め込んだ固定値と一致することを確認。不一致なら
+   非0で終了しビルドを止める)
+3. アーカイブ内の全エントリが安全なパス (絶対パスでない、`..`を含まない、
+   想定するトップディレクトリ`MyPocketOS-Fluent-yellow/`以下のみ) である
+   ことの検証。1つでも満たさなければ展開せず終了する
+4. `/usr/share/icons/`へ展開
+5. `index.theme`・`COPYING`・`MODIFICATIONS.md`・symbolic音量アイコン4種
+   の存在確認
+6. 元の`tar.gz`をイメージ内から削除 (最終ISOにアーカイブ自体は残らない)
+
+この一連の処理はネットワークアクセスを一切行いません (アーカイブは
+ビルド開始前にリポジトリから`config/includes.chroot`経由で既にchroot内へ
+配置されているため)。live-buildのchrootステージ順序
+(`chroot_includes_after_packages` → `chroot_hooks`、
+`/usr/lib/live/build/chroot`で確認済み) により、本hook実行時点でアーカイブは
+必ず存在します。
+
+**アーカイブの再生成**
+
+```sh
+./scripts/rebuild-fluent-yellow-subset.sh /path/to/fluent-icon-theme-2026-07-27.tar.gz
+```
+
+このスクリプト自体もネットワークアクセスを一切行いません。入力として
+受け付けるのは、下記SHA-256と一致する指定タグのtarballのみです (一致
+しない場合は処理を中断します)。処理の概要は、tarball展開 → 同梱の
+`install.sh`をローカル実行 (yellowカラーの標準明度のみ) → シンボリック
+リンクの実体化 → 固定サイズ/HiDPI/不正ファイル名3件の削除 → `MyPocketOS-Fluent-yellow`
+への改名 → `index.theme`書き換え → `MODIFICATIONS.md`生成 → 再現可能な
+`tar.gz`生成、です。**アーカイブを再生成した場合は、
+`config/hooks/normal/mypocketos-fluent-icon-theme.hook.chroot`内の
+`EXPECTED_ARCHIVE_SHA256`も新しいアーカイブのSHA-256へ必ず更新してください**
+(更新を忘れるとhookがSHA-256不一致でビルドを止めます)。
+
+**取得元・ライセンス**
+
+- upstream: Fluent Icon Theme (https://github.com/vinceliuice/Fluent-icon-theme)
+- 取得タグ: `2026-07-27` (コミット `c70c2441bcf2ab8bbc267e55635c76d69f659a8b`)
+- upstream入力tarballのSHA-256: `7fdd60faa543b297ef2d4f3d083d8b382e59a9b0933cbb1dfc042539d45036e2`
+- ライセンス: GPL-3.0。upstream原文のまま無改変の`COPYING`をアーカイブ内
+  (`MyPocketOS-Fluent-yellow/COPYING`) に同梱しています
+- 変更内容の詳細は、アーカイブ内`MyPocketOS-Fluent-yellow/MODIFICATIONS.md`
+  に記録しています (upstream情報・生成日・変更点・削除したディレクトリ・
+  除外したファイルの一覧)
+- upstreamの`install.sh`は、curl/wget/apt等のネットワークアクセスを一切
+  含まないことをソース確認済みです。ビルド時・Live起動時に`install.sh`を
+  ネットワーク経由で取得することはありません (アーカイブ生成は開発者が
+  事前に手元で1回だけ行い、その結果だけをリポジトリへコミットします)
+
+**主な変更点 (詳細は`MODIFICATIONS.md`参照)**
+
+- テーマ名を`Fluent-yellow`から`MyPocketOS-Fluent-yellow`へ変更
+  (upstream完全版と誤認されないようにするため)
+- `index.theme`を書き換え、実際に収録する`scalable/`・`symbolic/`配下の
+  ディレクトリのみを参照するようにした (固定サイズ`16`/`22`/`24`/`32`/
+  `256`とHiDPI`@2x`/`@3x`は削除。`scalable`/`symbolic`は`Type=Scalable`
+  のため任意の解像度で描画できる)
+- 生成過程で作られる`icon-theme.cache`を削除
+- ファイル名が不正 (拡張子欠落・破損) で実質的に無効な3ファイル
+  (`cinnamon-virtual-keyboard`・`org.gnome.Weather.Application.svg}`・
+  `page.kramo.Cartridges`) を除外 (upstream生成結果の時点で既にこの名前
+  であり、MyPocketOSが破損させたものではない。同名の正しい`.svg`拡張子
+  ファイルは別途存在する)
+- 色共通アイコンを指すシンボリックリンクを実ファイルへ実体化し、単体で
+  自己完結する構成にした
+- `scalable/`・`symbolic/`配下のSVGファイル自体の内容は、上記除外3件を
+  除きupstream生成結果と無改変
+
+アーカイブは12,220ファイル・約57MB相当を単一tar.gzに圧縮したもので、
+リポジトリへのコミットサイズは展開状態より大幅に小さくなります。
+
 ## Live環境のログイン
 
 MyPocketOSのLive環境は、通常起動時にlive-configの自動ログイン機能により
 自動的にデスクトップへログインします（ユーザー操作は不要です）。
 
-Openbox右クリックメニューの「電源・セッション」→「ログアウト」(またはjgmenuの
-同項目) を選択すると、LightDMのログイン画面へ戻ります。ログイン画面から
+デスクトップ背景を右クリックしてjgmenuを開き、「電源・セッション」→
+「ログアウト」を選択すると、LightDMのログイン画面へ戻ります。ログイン画面から
 再ログインする場合の既定のユーザー名・パスワードは次のとおりです。
 
 - ユーザー名: `user`
@@ -127,8 +224,8 @@ Openbox右クリックメニューの「電源・セッション」→「ログ�
 MyPocketOS独自の設定ではありません。また、将来実装予定の通常インストール環境
 （Calamares等）で作成されるユーザーアカウントの認証情報とは別のものです。
 
-VMでの動作確認により、Openbox右クリックメニューの「ログアウト」を実行して
-LightDMのログイン画面へ正常に戻ること、および上記の既定値（`user` / `live`）で
+VMでの動作確認により、デスクトップ右クリックのjgmenuから「ログアウト」を
+実行してLightDMのログイン画面へ正常に戻ること、および上記の既定値（`user` / `live`）で
 LightDMから再ログインできることを確認済みです。再ログイン後は以下も確認済みです。
 
 - `whoami` が `user` を返す
@@ -822,15 +919,16 @@ GUI起動からヘルパー実行までの間に状態が変化している可�
 
 #### メニュー統合
 
-jgmenuの`append.csv`とOpenbox右クリックメニュー (`menu.xml`) の両方に、
-GUI本体 (`mypocketos-persistence-setup`) を起動する項目を実装している。
-表示名はいずれも「永続領域を作成」である。特権ヘルパーはメニューや
-ショートカットから直接実行できるようにはしていない。
-- jgmenuでは、「電源・セッション」用の区切り線 (`^sep()`) より前に、
-  「電源・セッション」とは独立した項目として配置している (パーティション
-  操作は電源・セッションとは性質が異なるため)。
-- Openboxでは、「ファイルマネージャー」の項目の直後・次の`<separator />`
-  より前に、同様に独立した項目として配置している。
+jgmenuの`append.csv`が、tint2パネルの常駐jgmenuとデスクトップ背景右クリック
+(`mypocketos-jgmenu-at-pointer`) の両方に共通する実体であり、ここへGUI本体
+(`mypocketos-persistence-setup`) を起動する項目を実装している。表示名は
+「永続領域を作成」である。特権ヘルパーはメニューやショートカットから直接
+実行できるようにはしていない。「電源・セッション」用の区切り線 (`^sep()`)
+より前に、「電源・セッション」とは独立した項目として配置している
+(パーティション操作は電源・セッションとは性質が異なるため)。
+
+`menu.xml`にも同名の項目をファイルとして残しているが、デスクトップ背景の
+右クリックは現在jgmenuを表示するため、この導線では使用していない。
 
 #### 初版のスコープ外
 

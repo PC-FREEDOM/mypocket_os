@@ -17,3 +17,7 @@ libreoffice-help-ja
 
 # ---- 描画ツール (GNOME Drawing) ----
 drawing
+
+# ---- テキストエディタ・電卓 ----
+mousepad
+galculator

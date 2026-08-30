@@ -1,0 +1,129 @@
+#!/bin/sh
+#
+# mypocketos-fluent-icon-theme.hook.chroot
+#
+# config/includes.chroot経由で /usr/share/mypocketos/icon-themes/ へ
+# 既に配置されている MyPocketOS-Fluent-yellow.tar.gz を検証したうえで
+# /usr/share/icons/ へオフライン展開し、成功後にイメージ内から元の
+# tar.gzを削除する。
+#
+# 設計方針:
+# - ネットワークアクセスは一切行わない (アーカイブはビルド開始前に
+#   config/includes.chroot経由で既に配置済みであることを前提とする)。
+# - 実行順序: live-build の chroot ステージは
+#   chroot_includes_before_packages -> パッケージインストール ->
+#   chroot_includes_after_packages -> chroot_hooks (本hookはここで実行)
+#   の順であるため (/usr/lib/live/build/chroot で確認済み)、本hook実行
+#   時点でアーカイブは必ず存在する。
+# - SHA-256が一致しない場合、アーカイブ内のパスが安全でない場合、
+#   展開後に必須ファイルが揃っていない場合のいずれも、その場で非0終了
+#   し、壊れたイメージを作らない (set -eu によりdieを呼ばない箇所の
+#   予期しない失敗も同様に停止する)。
+# - eval は使用しない。
+#
+# アーカイブを scripts/rebuild-fluent-yellow-subset.sh で再生成した
+# 場合は、下記 EXPECTED_ARCHIVE_SHA256 も同時に更新すること
+# (README.md にも同様の注記あり)。
+#
+set -eu
+
+ARCHIVE_DIR="/usr/share/mypocketos/icon-themes"
+ARCHIVE_NAME="MyPocketOS-Fluent-yellow.tar.gz"
+ARCHIVE="${ARCHIVE_DIR}/${ARCHIVE_NAME}"
+THEME_NAME="MyPocketOS-Fluent-yellow"
+DEST_DIR="/usr/share/icons"
+DEST_THEME_DIR="${DEST_DIR}/${THEME_NAME}"
+
+EXPECTED_ARCHIVE_SHA256="7cbeced29d1e3377ddba6cd59e2b12ef0adc7cc15c368ecafdd256bcad327a38"
+
+die() {
+	echo "ERROR: mypocketos-fluent-icon-theme: $*" >&2
+	exit 1
+}
+
+#==========================
+# 1. アーカイブ存在確認
+#==========================
+[ -f "${ARCHIVE}" ] || die "archive not found: ${ARCHIVE}"
+
+#==========================
+# 2. SHA-256検証
+#==========================
+printf '%s  %s\n' "${EXPECTED_ARCHIVE_SHA256}" "${ARCHIVE}" | sha256sum -c - >/dev/null 2>&1 ||
+	die "archive SHA-256 mismatch (expected ${EXPECTED_ARCHIVE_SHA256}): ${ARCHIVE}"
+
+#==========================
+# 3. アーカイブ内パス安全性検証 (展開前、読み取り専用)
+#    - 絶対パスを含まない
+#    - ".." セグメントを含まない
+#    - 全エントリが "${THEME_NAME}/" 以下 (またはトップディレクトリ自身)
+#      であること
+#==========================
+LISTING="$(mktemp)"
+trap 'rm -f "${LISTING}"' EXIT
+
+tar -tzf "${ARCHIVE}" >"${LISTING}" || die "failed to list archive contents: ${ARCHIVE}"
+
+entry_count=0
+while IFS= read -r entry; do
+	entry_count=$((entry_count + 1))
+
+	case "${entry}" in
+	/*)
+		die "unsafe archive entry (absolute path): ${entry}"
+		;;
+	esac
+
+	case "${entry}" in
+	*/../* | ../* | */.. | ..)
+		die "unsafe archive entry (contains ..): ${entry}"
+		;;
+	esac
+
+	case "${entry}" in
+	"${THEME_NAME}/"* | "${THEME_NAME}")
+		: # OK: 想定するトップディレクトリ配下
+		;;
+	*)
+		die "unexpected top-level entry in archive: ${entry}"
+		;;
+	esac
+done <"${LISTING}"
+
+[ "${entry_count}" -gt 0 ] || die "archive appears to be empty: ${ARCHIVE}"
+
+#==========================
+# 4. 展開
+#==========================
+if [ -e "${DEST_THEME_DIR}" ]; then
+	rm -rf --one-file-system "${DEST_THEME_DIR}"
+fi
+
+tar -xzf "${ARCHIVE}" -C "${DEST_DIR}" || die "failed to extract archive: ${ARCHIVE}"
+
+#==========================
+# 5. 必須ファイル確認
+#==========================
+for f in index.theme COPYING MODIFICATIONS.md; do
+	[ -f "${DEST_THEME_DIR}/${f}" ] || die "missing required file after extraction: ${f}"
+done
+
+#==========================
+# 6. 展開後のテーマディレクトリ・symbolic音量アイコン確認
+#==========================
+for d in scalable symbolic; do
+	[ -d "${DEST_THEME_DIR}/${d}" ] || die "missing required directory after extraction: ${d}"
+done
+
+for icon in muted low medium high; do
+	f="${DEST_THEME_DIR}/symbolic/status/audio-volume-${icon}-symbolic.svg"
+	[ -f "${f}" ] || die "missing required icon after extraction: ${f}"
+done
+
+#==========================
+# 7. 元tar.gz削除 (イメージ内に残さない)
+#==========================
+rm -f "${ARCHIVE}"
+rmdir "${ARCHIVE_DIR}" 2>/dev/null || true
+
+echo "mypocketos-fluent-icon-theme: extracted and verified ${DEST_THEME_DIR}"

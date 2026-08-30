@@ -628,8 +628,12 @@
     <mousebind button="Middle" action="Press">
       <action name="ShowMenu"><menu>client-list-combined-menu</menu></action>
     </mousebind>
+    <!-- MyPocketOS: デスクトップ右クリックはjgmenu (mypocketos-jgmenu-at-pointer)
+         を使う。jgmenu本体を直接起動せず、常駐jgmenu daemon (tint2側の
+         jgmenu_run) と競合しない短命モードのラッパーを経由する。
+         tint2側の設定・常駐daemonには一切触れない。 -->
     <mousebind button="Right" action="Press">
-      <action name="ShowMenu"><menu>root-menu</menu></action>
+      <action name="Execute"><command>mypocketos-jgmenu-at-pointer</command></action>
     </mousebind>
   </context>
 
