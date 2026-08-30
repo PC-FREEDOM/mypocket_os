@@ -14,7 +14,7 @@ MPOS_THEME="${ICONS_DIR}/MyPocketOS/index.theme"
 GTK3_SETTINGS="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/gtk-3.0/settings.ini"
 GTK2_SETTINGS="${REPO_ROOT}/config/includes.chroot/etc/skel/.gtkrc-2.0"
 AUTOSTART="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/openbox/autostart"
-STANDARD_LIST="${REPO_ROOT}/config/package-lists/mypocketos-standard.list.chroot"
+STANDARD_LIST="${REPO_ROOT}/config/package-lists.d/mypocketos-standard.list.chroot"
 FLUENT_ARCHIVE="${REPO_ROOT}/config/includes.chroot/usr/share/mypocketos/icon-themes/MyPocketOS-Fluent-yellow.tar.gz"
 FLUENT_HOOK="${REPO_ROOT}/config/hooks/normal/mypocketos-fluent-icon-theme.hook.chroot"
 

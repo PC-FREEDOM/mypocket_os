@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 #
-# update-test-iso.sh - 共有ISO (MyPocketOS-dev.iso) の更新
+# update-test-iso.sh - 共有ISO (MyPocketOS-dev.iso) の更新 (Base/Standard edition選択制)
+#
+# 使い方:
+#   ./scripts/update-test-iso.sh base       Base版ISOで更新
+#   ./scripts/update-test-iso.sh standard   Standard版ISOで更新
 #
 # 開発ホスト (Debian) で実行するスクリプトです。MyPocketOSのISO内では
 # 実行しません。ISOビルドの再実行後、このISOを参照している全VMを停止した
@@ -8,8 +12,9 @@
 #
 #   1. virsh --connect qemu:///system shutdown <ドメイン名>
 #      (状態確認: virsh --connect qemu:///system domstate <ドメイン名>)
-#   2. ./scripts/build.sh でISOを再ビルド
-#   3. ./scripts/update-test-iso.sh を実行
+#   2. ./scripts/build.sh {base|standard} でISOを再ビルド
+#   3. ./scripts/update-test-iso.sh {base|standard} を実行 (ビルドしたeditionと
+#      同じものを指定する)
 #   4. 更新完了時に表示される起動コマンドで、各VMを起動する
 #
 # このスクリプトはISOファイルの更新のみを行います。VM定義・仮想ディスクの
@@ -26,6 +31,25 @@
 
 set -euo pipefail
 
+# ---- edition引数の検証 (他のどの処理よりも前に行う) --------------------------
+usage() {
+    echo "usage: $(basename "${BASH_SOURCE[0]}") {base|standard}" >&2
+    exit 2
+}
+
+if [ $# -ne 1 ]; then
+    usage
+fi
+
+case "$1" in
+    base | standard)
+        EDITION="$1"
+        ;;
+    *)
+        usage
+        ;;
+esac
+
 # ---- Debianホスト専用であることの確認 --------------------------------------
 if [ ! -r /etc/os-release ] || ! grep -q '^ID=debian$' /etc/os-release; then
     echo "エラー: このスクリプトは Debian の開発ホスト専用です。" >&2
@@ -40,10 +64,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LIBVIRT_URI="qemu:///system"
 LIBVIRT_OWNER="libvirt-qemu:libvirt-qemu"
 IMAGES_DIR="/var/lib/libvirt/images"
-ISO_SRC="${PROJECT_ROOT}/live-image-amd64.hybrid.iso"
+ISO_SRC="${PROJECT_ROOT}/mypocketos-${EDITION}-amd64.hybrid.iso"
 ISO_DEST="${IMAGES_DIR}/MyPocketOS-dev.iso"
 
 echo "== 処理対象の絶対パス =="
+echo "edition             : ${EDITION}"
 echo "プロジェクトルート : ${PROJECT_ROOT}"
 echo "ISOソース          : ${ISO_SRC}"
 echo "ISO配置先          : ${ISO_DEST}"
@@ -144,7 +169,7 @@ echo
 # ---- ISOソースが通常ファイルであることの確認 --------------------------------
 if [ ! -f "${ISO_SRC}" ]; then
     echo "エラー: ISOソース '${ISO_SRC}' が通常ファイルとして見つかりません。" >&2
-    echo "        先に ./scripts/build.sh でISOをビルドしてください。" >&2
+    echo "        先に ./scripts/build.sh ${EDITION} でISOをビルドしてください。" >&2
     exit 1
 fi
 
@@ -192,7 +217,7 @@ if [ "${SRC_SHA256}" != "${DEST_SHA256}" ]; then
     exit 1
 fi
 
-echo "ISOの更新とSHA-256検証が完了しました (${SRC_SHA256})。"
+echo "ISOの更新とSHA-256検証が完了しました (edition: ${EDITION}, ${SRC_SHA256})。"
 echo
 echo "次のコマンドで各VMを起動してください:"
 while IFS= read -r _domain; do
