@@ -6,9 +6,10 @@
 # 実行するスクリプトです。MyPocketOSのISO内では実行しません。
 #
 # 使い方:
-#   ./scripts/create-test-vm.sh                  BIOS版 (mypocketos-test) を作成
-#   ./scripts/create-test-vm.sh --firmware bios   同上を明示的に指定
-#   ./scripts/create-test-vm.sh --firmware uefi   UEFI版 (mypocketos-uefi-test) を作成
+#   ./scripts/create-test-vm.sh base                        BIOS版 (mypocketos-test) をBase版ISOで作成
+#   ./scripts/create-test-vm.sh standard                    同上をStandard版ISOで作成
+#   ./scripts/create-test-vm.sh --firmware uefi base        UEFI版 (mypocketos-uefi-test) をBase版ISOで作成
+#   ./scripts/create-test-vm.sh --firmware uefi standard    同上をStandard版ISOで作成
 #
 # このスクリプトは「作成」専用です。VM・仮想ディスク・配置済みISOといった
 # 永続資産を削除する機能 (virsh undefine / vol-delete / 配置済みISOやqcow2
@@ -35,24 +36,39 @@ set -euo pipefail
 
 # ---- 引数解析 (case文で限定。ネットワーク確認・sudo・ISO操作より前に行う) --
 usage() {
-    echo "usage: $(basename "${BASH_SOURCE[0]}") [--firmware bios|uefi]" >&2
+    echo "usage: $(basename "${BASH_SOURCE[0]}") [--firmware bios|uefi] {base|standard}" >&2
     exit 2
 }
 
 FIRMWARE="bios"
+EDITION=""
 
-if [ $# -eq 0 ]; then
-    :
-elif [ $# -eq 2 ] && [ "$1" = "--firmware" ]; then
-    case "$2" in
-        bios|uefi)
-            FIRMWARE="$2"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --firmware)
+            [ $# -ge 2 ] || usage
+            case "$2" in
+                bios|uefi)
+                    FIRMWARE="$2"
+                    ;;
+                *)
+                    usage
+                    ;;
+            esac
+            shift 2
+            ;;
+        base | standard)
+            [ -z "${EDITION}" ] || usage
+            EDITION="$1"
+            shift
             ;;
         *)
             usage
             ;;
     esac
-else
+done
+
+if [ -z "${EDITION}" ]; then
     usage
 fi
 
@@ -90,10 +106,11 @@ LIBVIRT_OWNER="libvirt-qemu:libvirt-qemu"
 IMAGES_DIR="/var/lib/libvirt/images"
 DISK_PATH="${IMAGES_DIR}/${VM_NAME}.qcow2"
 DISK_SIZE_GIB=16
-ISO_SRC="${PROJECT_ROOT}/live-image-amd64.hybrid.iso"
+ISO_SRC="${PROJECT_ROOT}/mypocketos-${EDITION}-amd64.hybrid.iso"
 ISO_DEST="${IMAGES_DIR}/MyPocketOS-dev.iso"
 
 echo "== 処理対象の絶対パス =="
+echo "edition             : ${EDITION}"
 echo "プロジェクトルート : ${PROJECT_ROOT}"
 echo "ISOソース          : ${ISO_SRC}"
 echo "ISO配置先          : ${ISO_DEST}"
@@ -143,7 +160,7 @@ fi
 # ---- ISOソースが通常ファイルであることの確認 --------------------------------
 if [ ! -f "${ISO_SRC}" ]; then
     echo "エラー: ISOソース '${ISO_SRC}' が通常ファイルとして見つかりません。" >&2
-    echo "        先に ./scripts/build.sh でISOをビルドしてください。" >&2
+    echo "        先に ./scripts/build.sh ${EDITION} でISOをビルドしてください。" >&2
     exit 1
 fi
 

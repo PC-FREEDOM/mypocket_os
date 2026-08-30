@@ -1,4 +1,9 @@
-# MyPocketOS - 最小構成パッケージリスト
+# MyPocketOS - 全edition共通の最小構成パッケージリスト
+# Base版はこのファイルのみ、Standard版はこのファイル+
+# mypocketos-standard.list.chroot を使う (積み上げ式)。
+# ビルド時、scripts/build.sh がeditionに応じて必要なファイルだけを
+# config/package-lists/ へ一時的にコピーする (このディレクトリ
+# config/package-lists.d/ 自体はlive-buildの読み込み対象外)。
 # 各パッケージは Debian 13 (trixie) の main / contrib / non-free-firmware に
 # 存在することを apt-cache show で確認済み。
 

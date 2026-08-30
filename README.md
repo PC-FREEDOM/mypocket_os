@@ -20,19 +20,33 @@ Debian 13 (trixie) 上で live-build を使い、ISOイメージをビルドし�
 
 ### 実行方法
 
+edition (`base` または `standard`) の指定が必須です。省略時や不正な値は
+デフォルトを推測せず、usageを表示して終了します。
+
 ```sh
-./scripts/build.sh
+./scripts/build.sh base
+./scripts/build.sh standard
 ```
 
 `scripts/build.sh` は以下の順に実行します。
 
-1. `sudo lb clean` — 前回のビルド生成物 (chroot・binary・各段階の生成物) を削除。パッケージキャッシュは再利用のため残す
-2. `lb config` — `auto/config` (`lb config noauto ...`) を実行し、`config/` 以下の設定を生成
-3. `sudo lb build` — chrootの構築とISOイメージの生成
+1. edition引数の検証
+2. 選択したeditionに必要なpackage-list (`config/package-lists.d/` が正本)
+   だけを`config/package-lists/`へ一時的に配置 (詳細は
+   「Base版 / Standard版のedition分離ビルド」節を参照)
+3. `sudo lb clean` — 前回のビルド生成物 (chroot・binary・各段階の生成物) を削除。パッケージキャッシュは再利用のため残す
+4. `lb config --image-name mypocketos-${EDITION}` — `auto/config` (`lb config noauto ...`) を実行し、`config/` 以下の設定を生成
+5. `sudo lb build` — chrootの構築とISOイメージの生成
+6. 一時配置したpackage-listの削除 (成功・失敗・SIGINT等いずれでも行う)
 
 実行ログは `build.log` に保存されます。
 
-ビルドに成功すると、プロジェクトルート直下に `live-image-amd64.hybrid.iso` が生成されます。出力ISOおよび live-build の作業生成物 (`config/binary` などの生成済み設定、`chroot/`、`cache/`、`local/`、`.build/` 等) はGit管理対象外です。
+ビルドに成功すると、プロジェクトルート直下に `mypocketos-base-amd64.hybrid.iso`
+または`mypocketos-standard-amd64.hybrid.iso`が生成されます (`--image-name`は
+live-buildの正規オプション。旧来の`live-image-amd64.hybrid.iso`という名前は
+今後生成されません)。出力ISOおよび live-build の作業生成物 (`config/binary`
+などの生成済み設定、`chroot/`、`cache/`、`local/`、`.build/` 等) はGit管理
+対象外です。
 
 ### 今回の実装範囲
 
@@ -84,6 +98,31 @@ Debian 13 (trixie) 上で live-build を使い、ISOイメージをビルドし�
   現時点では正常に機能しません。日本語でのメニュー表示、およびカテゴリからのアプリ
   起動には影響しません。
 
+### Base版 / Standard版のedition分離ビルド
+
+`config/package-lists.d/`を正本とし、Base版とStandard版を明示的に選んで
+別々にビルドできます。
+
+```
+Base     = mypocketos-common.list.chroot
+Standard = mypocketos-common.list.chroot + mypocketos-standard.list.chroot
+```
+
+live-build (`chroot_package-lists`) は `config/package-lists/*.list.chroot`
+に一致する全ファイルを無条件に取り込む仕様であり、edition単位で選択的に
+取り込む機能自体は持っていません。そのため正本を`config/package-lists.d/`
+(live-buildの読み込み対象外) に置き、`scripts/build.sh`がビルド中のみ
+選択されたeditionに必要なファイルだけを`config/package-lists/`へ一時的に
+配置し、ビルド終了後 (成功・失敗・SIGINT等いずれでも) 削除します。
+
+出力ISO名は、live-build標準の`--image-name`オプションで
+`mypocketos-base-amd64.hybrid.iso` / `mypocketos-standard-amd64.hybrid.iso`
+となります (ビルド後に`mv`等で改名する処理は行いません)。
+
+将来Creator版を追加する場合も、`mypocketos-creator.list.chroot`を
+`config/package-lists.d/`へ追加するだけで済み、common/standardの重複管理は
+発生しません (`Creator = common + standard + creator`という積み上げ式)。
+
 ### Standard版の追加アプリ
 
 Base版の構成に加えて、Standard版では次のアプリを追加します。
@@ -94,23 +133,26 @@ Base版の構成に加えて、Standard版では次のアプリを追加しま�
 - Mousepad (テキストエディタ)
 - Galculator (電卓)
 
-パッケージ定義は `config/package-lists/mypocketos-standard.list.chroot` に
+パッケージ定義は `config/package-lists.d/mypocketos-standard.list.chroot` に
 まとめています。Firefox・LibreOffice・Drawing・Mousepad・GalculatorはいずれもDebian 13 (trixie)
 のパッケージを使用しています。
 
 GIMP・Inkscape・動画編集・音楽制作・Blenderは、今回のStandard版には
 含めていません。将来のCreator系構成の候補です。
 
-**実測ビルド結果 (検証ビルド時点)**
+**実測ISOサイズ**
 
-Standard版パッケージを追加した状態で `./scripts/build.sh` を実行し、
-次を確認しました。
+`./scripts/build.sh base` / `./scripts/build.sh standard` でそれぞれ実際に
+ビルドし、確認した値です。
 
-- ISOサイズ: 1,782,890,496 bytes
-- Base版ISOからの増加: 355,549,184 bytes (約339.1 MiB)
-- ISO SHA-256 (今回の検証ビルドで得られた値であり、配布物を長期的に
-  保証する固定値ではありません):
-  `f413398f9895b475b7c5516fca1ca15e9d343c670a0eafca9a0cf9db160a45f6`
+| edition | ISO | サイズ |
+|---|---|---|
+| Base | `mypocketos-base-amd64.hybrid.iso` | 約1.33 GiB (1,428,750,336 bytes) |
+| Standard | `mypocketos-standard-amd64.hybrid.iso` | 約1.67 GiB (1,788,149,760 bytes) |
+
+差は約343 MiB (359,399,424 bytes、StandardはBaseより約25.15%大きく、
+BaseはStandardより約20.10%小さい) です。ISOのSHA-256はビルドごとに
+変わる (タイムスタンプ等を含むため) ため、ここには記載しません。
 
 ### アイコンテーマ (MyPocketOS-Fluent-yellow)
 
@@ -265,28 +307,26 @@ active であること)、および `sudo` が使えることが必要です。
 
 ### 初回作成
 
-BIOS版VMを作成します (引数なしは従来互換で、明示的に `--firmware bios` を
-指定した場合と同じ設定になります)。
+`create-test-vm.sh`・`update-test-iso.sh`とも、editionの指定 (`base` または
+`standard`) が必須です。省略時や不正な値はデフォルトを推測せず、usageを
+表示して終了します。
+
+BIOS版VMを作成します (`--firmware`省略時はBIOS)。
 
 ```sh
-./scripts/build.sh                 # ISOをビルド (未実施の場合)
-./scripts/create-test-vm.sh
-```
-
-明示的にBIOSを指定する場合:
-
-```sh
-./scripts/create-test-vm.sh --firmware bios
+./scripts/build.sh standard        # ISOをビルド (未実施の場合)
+./scripts/create-test-vm.sh standard
 ```
 
 UEFI版VMを作成する場合:
 
 ```sh
-./scripts/create-test-vm.sh --firmware uefi
+./scripts/create-test-vm.sh --firmware uefi standard
 ```
 
-いずれも `live-image-amd64.hybrid.iso` を
-`/var/lib/libvirt/images/MyPocketOS-dev.iso` へコピーし (コピー後にSHA-256を
+いずれも、指定したeditionに対応するISO
+(`mypocketos-base-amd64.hybrid.iso` / `mypocketos-standard-amd64.hybrid.iso`)
+を`/var/lib/libvirt/images/MyPocketOS-dev.iso`へコピーし (コピー後にSHA-256を
 照合)、`qemu:///system` に永続VMを作成して起動します。VMはこのISOから直接
 Live起動します (`--import` によりインストーラは起動しません)。
 
@@ -317,8 +357,8 @@ virtioビデオ・ich9サウンド・自動起動なしは、BIOS版・UEFI版�
 ```sh
 virsh --connect qemu:///system shutdown mypocketos-test        # BIOS版を停止
 virsh --connect qemu:///system shutdown mypocketos-uefi-test   # UEFI版を停止
-./scripts/build.sh                                              # ISOを再ビルド
-./scripts/update-test-iso.sh                                    # ISOのみを更新
+./scripts/build.sh standard                                     # ISOを再ビルド (ビルド済みのVMと同じeditionを指定)
+./scripts/update-test-iso.sh standard                           # ISOのみを更新 (同上)
 ```
 
 `update-test-iso.sh` は、固定のドメイン名をハードコードせず、このISOを
@@ -1103,7 +1143,8 @@ TPMは接続なし) を用意して使用した。いずれのVMにも次のみ�
 
 ## USB persistence IMG生成 (試作)
 
-`scripts/build-usb-persistence-image.sh` は、通常の`live-image-amd64.hybrid.iso`
+`scripts/build-usb-persistence-image.sh` は、通常のedition別ISO
+(`mypocketos-base-amd64.hybrid.iso` / `mypocketos-standard-amd64.hybrid.iso`)
 とは**別成果物**として、単一のGPT/MBR/APM/El Toritoハイブリッド構造に
 persistence用の第3パーティション (ext4, LABEL=`persistence`,
 `persistence.conf`の内容は`/home`) をあらかじめ追加したIMGファイルを、
@@ -1116,7 +1157,7 @@ persistence用の第3パーティション (ext4, LABEL=`persistence`,
 
 ```sh
 scripts/build-usb-persistence-image.sh \
-    --iso live-image-amd64.hybrid.iso \
+    --iso mypocketos-standard-amd64.hybrid.iso \
     --binary-dir binary \
     --persistence-size 2G \
     --output MyPocketOS-usb-persistence.img

@@ -26,6 +26,13 @@
 # lb config が自動生成する live 用パッケージリスト (auto/config 実行のたびに再生成される)
 /config/package-lists/live.list.chroot
 
+# scripts/build.sh がedition選択ビルド中のみ config/package-lists.d/ から
+# 一時的にコピーするファイル (正本はconfig/package-lists.d/側。ビルド後は
+# trapで削除されるが、異常終了時の残骸を誤ってGit管理下へ入れないための
+# 保険として明示的に無視する)
+/config/package-lists/mypocketos-common.list.chroot
+/config/package-lists/mypocketos-standard.list.chroot
+
 # lb configが生成する標準フック
 # MyPocketOS独自フックはmypocketos-で始める
 /config/hooks/live/*

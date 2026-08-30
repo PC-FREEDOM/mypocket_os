@@ -1,4 +1,5 @@
-# MyPocketOS - Standard版 追加パッケージリスト
+# MyPocketOS - Standard版 追加パッケージリスト (mypocketos-common.list.chroot
+# への積み上げ分のみ。commonに含まれるパッケージはここに書かない)
 # 各パッケージは Debian 13 (trixie) の main に
 # 存在することを apt-cache policy で確認済み。
 
