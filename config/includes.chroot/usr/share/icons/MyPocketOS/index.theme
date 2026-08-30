@@ -1,0 +1,128 @@
+[Icon Theme]
+Name=MyPocketOS
+Comment=MyPocketOS default icon theme (thin wrapper: MyPocketOS-Fluent-yellow -> Adwaita -> hicolor)
+Inherits=MyPocketOS-Fluent-yellow,Adwaita,hicolor
+Example=folder
+
+# MyPocketOS: 独自アイコンを持たない薄い継承テーマ。
+# GTK2/GTK3のgtk-icon-theme-nameへこのテーマ名 (MyPocketOS) を指定することで、
+# アイコン検索はまずこのテーマ (現時点では空)、次にMyPocketOS-Fluent-yellow
+# (Fluent Icon ThemeのMyPocketOS向け派生サブセット。upstream完全版では
+# ない。取得元・ライセンス等の詳細は同梱のCOPYING・MODIFICATIONS.md、
+# およびMyPocketOSリポジトリのREADME.mdを参照)、見つからなければAdwaita、
+# 最後にhicolorの順に解決される。
+# MyPocketOS独自のアイコンを追加する場合は、MyPocketOS-Fluent-yellow本体
+# (/usr/share/icons/MyPocketOS-Fluent-yellow、ビルド時にlive-build hookで
+# 展開される) を直接改変せず、下記Directoriesと同じ相対パス配下にこの
+# テーマ側へファイルを追加すること。
+# 例: scalable/status/audio-volume-high.svg
+#
+# Adwaitaへ戻したい場合は、gtk-3.0/settings.iniおよび.gtkrc-2.0の
+# gtk-icon-theme-nameを Adwaita に書き換えるだけでよい
+# (MyPocketOS-Fluent-yellow・MyPocketOSのファイルは削除不要)。
+Directories=scalable/applets,scalable/apps,scalable/devices,scalable/places,scalable/mimetypes,scalable/status,symbolic/apps,symbolic/actions,symbolic/categories,symbolic/devices,symbolic/emblems,symbolic/emotes,symbolic/mimetypes,symbolic/places,symbolic/status
+
+[scalable/apps]
+Context=Applications
+Size=64
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[scalable/applets]
+Size=64
+Context=Status
+Type=Scalable
+MinSize=32
+MaxSize=256
+
+[scalable/devices]
+Context=Devices
+Size=64
+MinSize=22
+MaxSize=512
+Type=Scalable
+
+[scalable/places]
+Context=Places
+Size=64
+MinSize=22
+MaxSize=512
+Type=Scalable
+
+[scalable/mimetypes]
+Context=MimeTypes
+Size=64
+MinSize=24
+MaxSize=512
+Type=Scalable
+
+[scalable/status]
+Context=Status
+Size=22
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/actions]
+Context=Actions
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/apps]
+Context=Applications
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/categories]
+Context=Categories
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/devices]
+Context=Devices
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/emblems]
+Context=Emblems
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/emotes]
+Context=Emotes
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/mimetypes]
+Context=MimeTypes
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/places]
+Context=Places
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+
+[symbolic/status]
+Context=Status
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable

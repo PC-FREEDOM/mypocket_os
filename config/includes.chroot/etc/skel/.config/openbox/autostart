@@ -8,7 +8,39 @@ nm-applet &
 lxpolkit &
 fcitx5 &
 spice-vdagent &
-(sleep 2 && pasystray) &
+(sleep 2 && GTK_THEME=Adwaita:dark pasystray) &
+
+# 起動モード (Normal Live / Persistence / Unknown) をConky起動前に1回だけ
+# mypocketos-boot-mode(1)で判定し、XDG_RUNTIME_DIR配下の状態ファイルへ
+# 書き込む。conky.conf側は${env}/${exec}/${execi}を使わず、組み込みLua
+# ($lua) でこのファイルを読む (mypocketos-boot-mode.lua参照)。
+#
+# XDG_RUNTIME_DIRの検証はmypocketos-powerのcheck_runtime_dir()と同じ方針
+# (未設定でない・シンボリックリンクでない・ディレクトリとして実在する・
+# 書き込み可能・所有UIDが自分と一致する)。いずれかを満たさない場合は
+# 何も書き込まない (Conky側のLuaが自然にUnknownへfail-closeする)。
+# 固定UID・/dev/shm・symlinkは使用せず、/homeにも書き込まない。
+# 書き込みはmktempで一時ファイルを作成してからrenameし、Conkyが読み取り
+# 途中の内容を見ることを避ける。
+write_boot_mode_state() {
+	[ -n "${XDG_RUNTIME_DIR:-}" ] || return 0
+	[ -L "$XDG_RUNTIME_DIR" ] && return 0
+	[ -d "$XDG_RUNTIME_DIR" ] || return 0
+	[ -w "$XDG_RUNTIME_DIR" ] || return 0
+
+	dir_uid="$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null)"
+	my_uid="$(id -u)"
+	[ -n "$dir_uid" ] && [ "$dir_uid" = "$my_uid" ] || return 0
+
+	mode="$(mypocketos-boot-mode 2>/dev/null || echo Unknown)"
+	tmp_file="$(mktemp "$XDG_RUNTIME_DIR/mypocketos-boot-mode.txt.XXXXXX" 2>/dev/null)" || return 0
+	if printf '%s\n' "$mode" >"$tmp_file" 2>/dev/null; then
+		mv -f "$tmp_file" "$XDG_RUNTIME_DIR/mypocketos-boot-mode.txt" 2>/dev/null || rm -f "$tmp_file"
+	else
+		rm -f "$tmp_file"
+	fi
+}
+write_boot_mode_state
 
 # -p: 起動直後の競合を避けるため数秒待ってから開始 (man conky(1) -p/--pause)
 # -U: 既にconkyが起動していれば多重起動しない (man conky(1) -U/--unique)

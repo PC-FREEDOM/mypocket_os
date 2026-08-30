@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# mypocketos-jgmenu-at-pointer - デスクトップ右クリック用の短命jgmenuラッパー
+#
+# tint2パネルボタンは jgmenu_run (引数なし) を使い、jgmenurc の
+# position_mode = ipc により常駐jgmenu daemon (stay_alive = 1) をパネル
+# ボタン位置に表示する。このdaemonにはここから一切触れない・killしない。
+#
+# 本ラッパーは、デスクトップ右クリックのためだけに短命の別プロセスを
+# 起動する。jgmenu (4.5.0, Debian 13 trixie) の --simple モード
+# ("ignore tint2 settings; run in short-lived mode ... read menu items
+# from stdin", 公式 jgmenu(1) man pageで確認済み) は、常駐daemonが保持する
+# ~/.jgmenu-lockfile を使わないため、daemonと競合せず共存できることを
+# 実機で確認済み (daemon存命中に本ラッパー相当のコマンドを実行しても
+# daemon側のプロセスに影響なし、本ラッパー側のプロセスもEscape/選択後に
+# 残らないことを確認)。
+#
+# メニュー内容をdaemon側と一致させるため、jgmenurcのcsv_cmd = apps と
+# 同じジェネレータを "jgmenu_run apps" として明示的に呼び出し、その
+# 標準出力を --simple の標準入力(メニュー項目)としてそのまま渡す
+# (jgmenu(1) man page記載の "printf ... | jgmenu --simple" と同じ形の
+# 標準入力の使い方)。jgmenu_run apps は append.csv (Mousepad/Galculator
+# 等の追加項目) を含めて daemon 側と同一内容を生成することを実機で確認済み。
+#
+# 引数は受け取らない (呼び出し元を限定した単純なラッパーのため)。
+
+set -eu
+jgmenu_run apps | jgmenu --at-pointer --simple

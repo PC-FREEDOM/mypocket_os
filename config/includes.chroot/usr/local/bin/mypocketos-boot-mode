@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# mypocketos-boot-mode - 起動モード (Normal Live / Persistence / Unknown) を判定する
+#
+# 使い方:
+#   mypocketos-boot-mode        - /proc/cmdline を読んで判定する (本番呼び出し)
+#   mypocketos-boot-mode FILE   - FILE を /proc/cmdline の代わりに読む (テスト専用。
+#                                 本番の呼び出し (autostart) では引数を渡さない)
+#
+# 判定ルール:
+# /proc/cmdline を空白区切りの完全一致トークンとして判定する (部分一致・
+# key=value形式は対象外)。
+#   persistence が1件・nopersistence が0件   -> Persistence
+#   persistence が0件・nopersistence が1件   -> Normal Live
+#   それ以外 (両方・重複・両方無し・読み取り失敗) -> Unknown (fail-closed)
+#
+# 副作用: 一切なし。標準出力へ上記3つのいずれか1行を出力するのみ。
+# 終了コードは常に0 (判定不能な場合もUnknownを出力したうえで0で終了する)。
+
+set -u
+
+CMDLINE_FILE="${1:-/proc/cmdline}"
+
+content=""
+if [ -r "${CMDLINE_FILE}" ]; then
+	content="$(cat "${CMDLINE_FILE}" 2>/dev/null)" || content=""
+fi
+
+persistence_count=0
+nopersistence_count=0
+
+for token in ${content}; do
+	case "${token}" in
+	persistence)
+		persistence_count=$((persistence_count + 1))
+		;;
+	nopersistence)
+		nopersistence_count=$((nopersistence_count + 1))
+		;;
+	esac
+done
+
+if [ "${persistence_count}" -eq 1 ] && [ "${nopersistence_count}" -eq 0 ]; then
+	echo "Persistence"
+elif [ "${persistence_count}" -eq 0 ] && [ "${nopersistence_count}" -eq 1 ]; then
+	echo "Normal Live"
+else
+	echo "Unknown"
+fi
