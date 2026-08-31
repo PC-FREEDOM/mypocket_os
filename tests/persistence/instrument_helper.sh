@@ -9,8 +9,11 @@
 # 使い方: instrument_helper.sh SANDBOX_DIR DEST_PATH
 #
 # 各ルールの一致件数は、事前に `grep -cE` で本体ファイルに対して直接
-# 確認済みの値である (2026年時点のソースに基づく)。CMD_* が19件、その他が
-# 19件の合計38ルール。
+# 確認済みの値である。CMD_* が24件 (create-same-usb関連のCMD_SFDISK/
+# CMD_BLOCKDEV/CMD_READLINK/CMD_PARTX/CMD_RMを含む)、その他が24件 (同じく
+# create-same-usb追加分を含む: sysfsパス1件・mktempテンプレート1件・
+# identify_new_partition_since_baseline用の/dev制約2件・-b緩和1件) の
+# 合計48ルール。
 set -eu
 
 TESTS_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
@@ -45,6 +48,11 @@ instrument_helper() {
     apply_rule helper-cmd-awk       'CMD_AWK=/usr/bin/awk'                    'CMD_AWK=@@SANDBOX_BIN@@/awk'             1 "$dest"
     apply_rule helper-cmd-grep      'CMD_GREP=/usr/bin/grep'                  'CMD_GREP=@@SANDBOX_BIN@@/grep'           1 "$dest"
     apply_rule helper-cmd-ls        'CMD_LS=/usr/bin/ls'                      'CMD_LS=@@SANDBOX_BIN@@/ls'               1 "$dest"
+    apply_rule helper-cmd-sfdisk    'CMD_SFDISK=/usr/sbin/sfdisk'             'CMD_SFDISK=@@SANDBOX_BIN@@/sfdisk'       1 "$dest"
+    apply_rule helper-cmd-blockdev  'CMD_BLOCKDEV=/usr/sbin/blockdev'         'CMD_BLOCKDEV=@@SANDBOX_BIN@@/blockdev'   1 "$dest"
+    apply_rule helper-cmd-readlink  'CMD_READLINK=/usr/bin/readlink'          'CMD_READLINK=@@SANDBOX_BIN@@/readlink'   1 "$dest"
+    apply_rule helper-cmd-partx     'CMD_PARTX=/usr/bin/partx'                'CMD_PARTX=@@SANDBOX_BIN@@/partx'         1 "$dest"
+    apply_rule helper-cmd-rm        'CMD_RM=/usr/bin/rm'                      'CMD_RM=@@SANDBOX_BIN@@/rm'               1 "$dest"
 
     # ---- 段階1b: その他 (19件) -------------------------------------------
     apply_rule helper-fixed-path \
@@ -69,6 +77,12 @@ instrument_helper() {
         '@@SANDBOX_SYS@@/class/block/$DEVICE_KNAME/holders' \
         1 "$dest"
 
+    # check_usb_transport (create-same-usb専用) が使う実デバイスパス。
+    apply_rule helper-sys-device-check-same-usb \
+        '/sys/class/block/\$DEVICE_KNAME/device' \
+        '@@SANDBOX_SYS@@/class/block/$DEVICE_KNAME/device' \
+        1 "$dest"
+
     apply_rule helper-proc-cmdline \
         '"\$CMD_CAT" /proc/cmdline' \
         '"$CMD_CAT" @@SANDBOX_PROC_CMDLINE@@' \
@@ -79,16 +93,24 @@ instrument_helper() {
         '"$CMD_CAT" @@SANDBOX_PROC_SWAPS@@' \
         1 "$dest"
 
-    # check_live_envの判定文・エラーメッセージ・check_not_live_sourceの
-    # findmnt --target の計3箇所に同一リテラルが出現する。
+    # check_live_envの判定文・エラーメッセージ・check_not_live_source
+    # (Mode A) ・check_is_live_boot_disk (Mode B create-same-usb) の
+    # findmnt --target の計4箇所に同一リテラルが出現する。
     apply_rule helper-run-live-medium \
         '/run/live/medium' \
         '@@SANDBOX_RUN@@/live/medium' \
-        3 "$dest"
+        4 "$dest"
 
     apply_rule helper-mktemp-template \
         '/run/mypocketos-persistence-setup-helper\.XXXXXX' \
         '@@SANDBOX_RUN@@/mypocketos-persistence-setup-helper.XXXXXX' \
+        1 "$dest"
+
+    # create-same-usb (Mode B) のsfdiskバックアップ用一時ディレクトリの
+    # mktempテンプレート。
+    apply_rule helper-mktemp-template-sfdisk-backup \
+        '/run/mypocketos-persistence-setup-helper\.sfdisk-backup\.XXXXXX' \
+        '@@SANDBOX_RUN@@/mypocketos-persistence-setup-helper.sfdisk-backup.XXXXXX' \
         1 "$dest"
 
     # ---- /dev配下制約 (無効化せず、sandbox/devを指すよう置換する) --------
@@ -124,6 +146,19 @@ instrument_helper() {
         'if [ "$part_parent" != '"'"'@@SANDBOX_DEV@@'"'"' ]' \
         1 "$dest"
 
+    # identify_new_partition_since_baseline (create-same-usb専用、Mode Aの
+    # identify_created_partitionとは変数名を別にしているため、上記2ルール
+    # とは別に必要)。
+    apply_rule_next_line helper-dev-prefix-identify-new-part \
+        'case "\$new_part_path" in' 1 \
+        '/dev/\*' '@@SANDBOX_DEV@@/*' \
+        "$dest"
+
+    apply_rule helper-dev-parent-identify-new-part \
+        'if \[ "\$new_part_parent" != '"'"'/dev'"'"' \]' \
+        'if [ "$new_part_parent" != '"'"'@@SANDBOX_DEV@@'"'"' ]' \
+        1 "$dest"
+
     # ---- -b -> -e 緩和 (root/mknod無しで実block deviceを用意できないため) --
     apply_rule helper-b-device-arg \
         '\[ ! -b "\$device" \]' '[ ! -e "$device" ]' 1 "$dest"
@@ -135,6 +170,8 @@ instrument_helper() {
         '\[ ! -b "\$part_path" \]' '[ ! -e "$part_path" ]' 1 "$dest"
     apply_rule helper-b-reverify-part \
         '\[ ! -b "\$CREATED_PART_PATH" \]' '[ ! -e "$CREATED_PART_PATH" ]' 1 "$dest"
+    apply_rule helper-b-identify-new-part \
+        '\[ ! -b "\$new_part_path" \]' '[ ! -e "$new_part_path" ]' 1 "$dest"
 
     # ---- 段階2: 固定トークン -> 実サンドボックスパス ---------------------
     resolve_token '@@SANDBOX_BIN@@' "$sandbox/bin" "$dest"
@@ -156,12 +193,12 @@ verify_helper_invariants() {
     # 未解決トークンが0件であること。
     assert_count 'helper-invariant-no-unresolved-tokens' '@@[A-Z_]+@@' "$dest" 0
 
-    # CMD_* が正確に19件であること。
-    assert_count 'helper-invariant-cmd-star-count' '^CMD_[A-Za-z0-9_]+=' "$dest" 19
+    # CMD_* が正確に24件であること。
+    assert_count 'helper-invariant-cmd-star-count' '^CMD_[A-Za-z0-9_]+=' "$dest" 24
 
-    # その19件全てがsandbox bin配下を指していること。
+    # その24件全てがsandbox bin配下を指していること。
     assert_count 'helper-invariant-cmd-star-all-sandboxed' \
-        "^CMD_[A-Za-z0-9_]+=${sandbox_esc}/bin/" "$dest" 19
+        "^CMD_[A-Za-z0-9_]+=${sandbox_esc}/bin/" "$dest" 24
 
     # 固定PATHがsandbox binのみを指していること。
     assert_count 'helper-invariant-path-is-sandbox-bin' \

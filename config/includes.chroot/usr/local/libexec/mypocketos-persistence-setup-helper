@@ -5,8 +5,23 @@
 # README.md の「GUIによる永続領域作成 (実装仕様)」節に基づく実装。
 # GUI本体 (mypocketos-persistence-setup、実装済み) から
 #   sudo -n -- mypocketos-persistence-setup-helper create DEVICE MAJOR:MINOR
+#   sudo -n -- mypocketos-persistence-setup-helper create-same-usb DEVICE MAJOR:MINOR
 # の形で1回だけ呼び出されることを前提とする。sudoはGUI側が使うものであり、
 # 本スクリプト自身はsudoを実行しない (常にroot権限で起動される前提)。
+#
+# create (Mode A) と create-same-usb (Mode B) は、判定条件・破壊的操作の
+# 両方が正反対の別モードである。
+#   - create: 対象diskが「完全に未使用のwhole disk」であることを要求し、
+#     parted mklabel gptで新規GPTを作成したうえで単一partitionを作る。
+#   - create-same-usb: 対象diskが「MyPocketOS自身の起動元USB」であることを
+#     要求し (createとは逆に、Live起動元との一致を必須とする)、既存の
+#     DOS/MBRパーティションテーブルとその全既存partition (ISO領域・EFI
+#     領域等) を一切変更せず、末尾の未使用領域だけにpartitionを1個
+#     追加する (sfdisk --append)。
+# 両モードの条件・破壊的操作を1つの関数に無理に共通化せず、意図的に
+# 別々の検証関数・別々の終了コード帯 (create-same-usbは30番台) として
+# 実装する。createのロジック・終了コードは本機能追加によって一切変更
+# しない (メイン処理のcase分岐でモードごとに完全に分離する)。
 #
 # 設計方針 (README.md 該当節を参照):
 # - GUI側の判定は「予備的な絞り込み」に過ぎない。破壊的操作
@@ -73,11 +88,36 @@ CMD_CAT=/usr/bin/cat
 CMD_SYNC=/usr/bin/sync
 CMD_MKDIR=/usr/bin/mkdir
 CMD_RMDIR=/usr/bin/rmdir
+CMD_RM=/usr/bin/rm
 CMD_AWK=/usr/bin/awk
 CMD_GREP=/usr/bin/grep
 CMD_LS=/usr/bin/ls
 
+# create-same-usb (Mode B) 専用に追加で使うコマンド。create (Mode A) は
+# これらを一切使わないため、check_required_commands() (共通) には含めず、
+# check_required_commands_same_usb() で別途確認する。
+CMD_SFDISK=/usr/sbin/sfdisk
+CMD_BLOCKDEV=/usr/sbin/blockdev
+CMD_READLINK=/usr/bin/readlink
+# partx: sfdiskによるdisk上のパーティションテーブル更新と、カーネルへの
+# 新規パーティション登録を分離するために使う (Live起動元USB自身を
+# 変更するMode B特有の事情。README/設計レビュー参照)。ディスク自体は
+# 変更せず、カーネルのパーティション登録 (bookkeeping) のみを更新する。
+CMD_PARTX=/usr/bin/partx
+
 LOCK_DIR='/run/lock/mypocketos-persistence-setup-helper.lock'
+
+# ---- create-same-usb (Mode B) 専用の定数 -----------------------------------
+# 末尾未使用領域の最小サイズ (1GiB、README仕様で確定)。これ未満なら
+# 候補として扱わず拒否する。
+SAME_USB_MIN_FREE_BYTES=1073741824
+
+# アライメント境界 (1MiB = 1048576 バイト)。新規partitionの開始位置は、
+# 既存partitionの末尾より後ろで、この境界以上に切り上げた位置とする。
+SAME_USB_ALIGN_BYTES=1048576
+
+# 新規追加するpartitionのtype (MBR、Linux native)。
+SAME_USB_PART_TYPE='83'
 
 # ---- 状態フラグ (trapによる後始末で参照する) ------------------------------
 LOCK_ACQUIRED=0
@@ -85,10 +125,17 @@ MOUNTED=0
 MNT_DIR=''
 CLEANUP_DONE=0
 SIGNAL_PENDING=''
+# create-same-usb (Mode B) がsfdisk --backupの保存先として作成する一時
+# ディレクトリ。永続的なバックアップ保存は要求せず (自動復元も行わない
+# 方針と同様、保持し続けること自体が追加のリスクになるため)、成功・
+# 失敗・シグナル終了のいずれでも、MNT_DIR/LOCK_DIRと同じtrap経由で
+# 必ず削除する一時ファイルとして扱う。
+SFDISK_BACKUP_DIR=''
 
 # ---- 共通ユーティリティ ---------------------------------------------------
 usage() {
     printf 'usage: %s create DEVICE MAJOR:MINOR\n' "$PROG_NAME" >&2
+    printf '       %s create-same-usb DEVICE MAJOR:MINOR\n' "$PROG_NAME" >&2
     exit 2
 }
 
@@ -188,6 +235,21 @@ on_exit() {
         fi
     fi
 
+    # create-same-usb (Mode B) が作成したsfdiskバックアップ用の一時
+    # ディレクトリを削除する。永続的な保存は要求せず、成功・失敗いずれの
+    # 場合も必ず削除する (方針は上部のSFDISK_BACKUP_DIR宣言コメント参照)。
+    # rmdirではなくrmを使う (中に生成されたバックアップファイルが残って
+    # いるため、空ディレクトリ限定のrmdirでは削除できない)。
+    if [ -n "$SFDISK_BACKUP_DIR" ] && [ -d "$SFDISK_BACKUP_DIR" ]; then
+        if ! "$CMD_RM" -rf -- "$SFDISK_BACKUP_DIR" 2>&2; then
+            printf '%s: 後始末に失敗しました (sfdiskバックアップ用一時ディレクトリ %s の削除に失敗)。\n' \
+                "$PROG_NAME" "$SFDISK_BACKUP_DIR" >&2
+            if [ "$ec" -eq 0 ]; then
+                ec=71
+            fi
+        fi
+    fi
+
     # 自身が作成したロックディレクトリだけを削除する。他プロセスが作成
     # したロックには一切干渉しない (このプロセスが acquire_lock() で
     # 実際にmkdirへ成功した場合のみ LOCK_ACQUIRED=1 になっている)。
@@ -212,6 +274,7 @@ on_exit() {
     case " $ec " in
         ' 0 ' | ' 2 ' | ' 10 ' | ' 11 ' | ' 12 ' | ' 13 ' | ' 14 ' | ' 15 ' | ' 16 ' | \
         ' 20 ' | ' 21 ' | ' 22 ' | ' 23 ' | ' 24 ' | ' 25 ' | ' 70 ' | ' 71 ' | \
+        ' 30 ' | ' 31 ' | ' 32 ' | ' 33 ' | ' 34 ' | ' 35 ' | ' 36 ' | ' 37 ' | ' 38 ' | ' 39 ' | ' 40 ' | \
         ' 129 ' | ' 130 ' | ' 143 ')
             ;;
         *)
@@ -236,9 +299,12 @@ OP="$1"
 DEVICE_ARG="$2"
 MAJMIN_ARG="$3"
 
-if [ "$OP" != 'create' ]; then
-    usage
-fi
+case "$OP" in
+    create | create-same-usb) ;;
+    *)
+        usage
+        ;;
+esac
 
 # ---- 使用コマンドの実在・実行可能性の確認 (終了コード70) -------------------
 # 破壊的操作より前に、直接呼び出す全コマンド (CMD_* の全て) が実在し
@@ -248,11 +314,49 @@ check_required_commands() {
         "$CMD_LSBLK" "$CMD_FINDMNT" "$CMD_WIPEFS" "$CMD_PARTED" "$CMD_PARTPROBE" \
         "$CMD_UDEVADM" "$CMD_MKFS_EXT4" "$CMD_MOUNT" "$CMD_UMOUNT" "$CMD_MKTEMP" \
         "$CMD_STAT" "$CMD_ID" "$CMD_CAT" "$CMD_SYNC" "$CMD_MKDIR" "$CMD_RMDIR" \
-        "$CMD_AWK" "$CMD_GREP" "$CMD_LS"
+        "$CMD_RM" "$CMD_AWK" "$CMD_GREP" "$CMD_LS"
     do
         if [ ! -x "$cmd" ]; then
             fail 70 "必要なコマンドが見つからないか実行できません: $cmd"
         fi
+    done
+}
+
+# ---- create-same-usb (Mode B) 専用コマンドの確認 (終了コード70) ------------
+# sfdisk/blockdev/readlinkの実在・実行可能性に加え、本実装が前提とする
+# sfdisk --append / --lock / --backup オプション自体が、実際に動作している
+# sfdiskでサポートされていることも確認する (Debian 13 trixieのutil-linux
+# 2.41.5で実機確認済みだが、将来のpoint release差異等でオプションが
+# 変化した場合に、誤動作ではなく明示的な70番で停止させるための防御)。
+check_required_commands_same_usb() {
+    for cmd in "$CMD_SFDISK" "$CMD_BLOCKDEV" "$CMD_READLINK" "$CMD_PARTX"; do
+        if [ ! -x "$cmd" ]; then
+            fail 70 "必要なコマンドが見つからないか実行できません: $cmd"
+        fi
+    done
+
+    sfdisk_help="$("$CMD_SFDISK" --help 2>&1)" || sfdisk_help=''
+    # --no-reread / --no-tell-kernel: Live起動元USB自身 (マウント中の
+    # sda1を含むディスク) へパーティションを追加するMode B特有の要件。
+    # 実機で「This disk is currently in use ...」により sfdisk --append
+    # 自体が失敗する不具合が確認されたため追加した (設計レビュー参照)。
+    for opt in ' -a, --append' ' --lock' ' -b, --backup' ' --no-reread' ' --no-tell-kernel'; do
+        case "$sfdisk_help" in
+            *"$opt"*) ;;
+            *)
+                fail 70 "sfdiskが必要なオプション ($opt) に対応していません。"
+                ;;
+        esac
+    done
+
+    partx_help="$("$CMD_PARTX" --help 2>&1)" || partx_help=''
+    for opt in ' -a, --add' ' -n, --nr'; do
+        case "$partx_help" in
+            *"$opt"*) ;;
+            *)
+                fail 70 "partxが必要なオプション ($opt) に対応していません。"
+                ;;
+        esac
     done
 }
 
@@ -804,6 +908,637 @@ final_verification() {
     check_no_signature
 }
 
+# =============================================================================
+# create-same-usb (Mode B): 起動元USBの末尾未使用領域へのpersistence追加
+# =============================================================================
+#
+# create (Mode A) とは判定条件・破壊的操作とも正反対である。対象diskは
+# 「MyPocketOS自身の起動元USB」であることを要求し、既存のDOS/MBR
+# パーティションテーブルと全既存partition (ISO領域・EFI領域等) を一切
+# 変更せず、末尾の未使用領域だけにpartitionを1個追加する。
+#
+# 実機で確認されたMyPocketOSのHybrid ISO構造 (isohybrid/xorriso由来) は、
+#   partition 1: ISO9660イメージ全体 (type=0 Empty, bootable)
+#   partition 2: EFIシステムパーティション (type=ef)、数値上partition 1の
+#                範囲にネストされている (start=540,size=6656はstart=64,
+#                size=3492416の範囲内)
+# という、一般的な「隣接して重ならない」構成ではなく、意図的な重複構造で
+# ある (MyPocketOS側の不具合ではない)。末尾未使用領域の計算は「全既存
+# partitionの終端 (start+size) の最大値」を基準にするため、partition
+# 同士が重なっていても計算は影響を受けない。
+#
+# parted はこの実機Hybrid ISO構造を "unknown" と誤認する (実機確認済み)
+# ため、正本解析には sfdisk --dump を使う (sfdisk --json も実機で動作
+# 確認済みだが、POSIX sh/awkでJSONパーサを追加実装する複雑さに見合う
+# 利点がないと判断し、より単純な --dump 形式を採用する)。
+#
+# 変更前のパーティションテーブルのバックアップは sfdisk --backup で
+# 取る (異常時の手動復旧の助けとする用途のみ。自動復元は行わない。
+# 自動復元自体が追加の書込みリスクになるため、初版では要求しない)。
+# 追加操作 (sfdisk --append) 自体には --lock=yes を付け、udev等による
+# 並行アクセスに対するカーネルレベルの排他をさらに一枚重ねる (GUI/helper
+# 既存のmkdirロックとは別の防御層であり、置き換えではない)。
+#
+# 追加操作後に既存partitionの内容が変化していないことを確認する処理は、
+# 「書き込みを未然に防ぐ」ものではない。sfdisk --append の時点で、
+# ディスクへの書き込みは既に発生している。この確認は、意図しない変化を
+# 検出した場合に、それ以上の処理 (mkfs等) へ進むことを止めるための
+# サーキットブレーカーとして位置づける。
+
+# ---- USB起動元媒体であることの確認 (終了コード30) --------------------------
+# README「4.3 起動媒体の種類」: removable=1単独を根拠にせず、TRAN (接続
+# 方式) とsysfsの実デバイスパスの両方でUSB接続であることを確認する。
+check_usb_transport() {
+    tran="$("$CMD_LSBLK" -dn -o TRAN -- "$DEVICE" 2>/dev/null)" || tran=''
+    if [ "$tran" != 'usb' ]; then
+        fail 30 "起動元デバイスがUSB接続として確認できません (TRAN=${tran:-取得不可}): $DEVICE"
+    fi
+
+    dev_link="/sys/class/block/$DEVICE_KNAME/device"
+    resolved="$("$CMD_READLINK" -f -- "$dev_link" 2>/dev/null)" || resolved=''
+    if [ -z "$resolved" ]; then
+        fail 30 "起動元デバイスの実デバイスパスを解決できません: $DEVICE"
+    fi
+    case "$resolved" in
+        */usb[0-9]*/*) ;;
+        *)
+            fail 30 "起動元デバイスの実デバイスパスにUSBバスの経路が見つかりません: $resolved"
+            ;;
+    esac
+}
+
+# ---- 対象diskがMyPocketOS起動元USBそのものであることの確認 (終了コード31) --
+# check_not_live_source (Mode A) とは逆に、一致することを要求する。
+# ancestor_chain_contains_deviceの戻り値のうち、0 (一致) の場合のみ
+# 通過させ、1 (不一致) と2 (判定不能) はどちらも拒否する (取得不能を
+# 「一致しない」と誤認しない設計はMode Aと同じだが、要求する結果が
+# 逆になる)。
+check_is_live_boot_disk() {
+    live_source="$("$CMD_FINDMNT" -rn -o SOURCE --target /run/live/medium 2>/dev/null)" || live_source=''
+    if [ -z "$live_source" ]; then
+        fail 31 "Live起動元デバイスのSOURCEを取得できませんでした (安全側として拒否します): $DEVICE"
+    fi
+
+    rc=0
+    ancestor_chain_contains_device "$live_source" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        fail 31 "対象ディスクはMyPocketOSの起動元USBと一致しないか、安全に判定できません: $DEVICE"
+    fi
+}
+
+# ---- 既存パーティションテーブルの取得・解析 (終了コード32/33) --------------
+# 成功時に設定するグローバル変数:
+#   PT_SECTOR_SIZE  - セクタサイズ (バイト)
+#   PT_ENTRIES      - 改行区切り、各行 "devpath|start|size|type|bootable"
+#                     (start/sizeはPT_SECTOR_SIZE単位のセクタ数)
+#   PT_ENTRY_COUNT  - PT_ENTRIESの行数
+fetch_partition_table() {
+    dump="$("$CMD_SFDISK" --dump -- "$DEVICE" 2>/dev/null)" || dump=''
+    if [ -z "$dump" ]; then
+        fail 32 "既存パーティションテーブルを取得できませんでした (sfdisk --dump失敗): $DEVICE"
+    fi
+
+    # ヘッダブロック (最初の空行より前) と、パーティション行ブロック
+    # (最初の空行より後) に分ける。
+    header="$(printf '%s\n' "$dump" | "$CMD_AWK" '/^$/{exit} {print}')"
+    body="$(printf '%s\n' "$dump" | "$CMD_AWK" 'blank{print} /^$/{blank=1}')"
+
+    pt_label=''
+    pt_unit=''
+    PT_SECTOR_SIZE=''
+    while IFS= read -r hline; do
+        [ -n "$hline" ] || continue
+        case "$hline" in
+            'label: '*)       pt_label="${hline#label: }" ;;
+            'unit: '*)        pt_unit="${hline#unit: }" ;;
+            'sector-size: '*) PT_SECTOR_SIZE="${hline#sector-size: }" ;;
+        esac
+    done <<HEADER_EOF
+$header
+HEADER_EOF
+
+    if [ "$pt_label" != 'dos' ]; then
+        fail 32 "既存パーティションテーブルがDOS/MBRではありません (label=${pt_label:-取得不可}): $DEVICE"
+    fi
+    if [ "$pt_unit" != 'sectors' ]; then
+        fail 32 "既存パーティションテーブルの単位がsectorsではありません (unit=${pt_unit:-取得不可}): $DEVICE"
+    fi
+    case "$PT_SECTOR_SIZE" in
+        '' | *[!0-9]*)
+            fail 32 "既存パーティションテーブルのセクタサイズを取得できませんでした: $DEVICE"
+            ;;
+    esac
+    if [ "$PT_SECTOR_SIZE" -le 0 ]; then
+        fail 32 "既存パーティションテーブルのセクタサイズが不正です (${PT_SECTOR_SIZE}): $DEVICE"
+    fi
+
+    # 実機のsfdisk --dumpは、start=/size=の値を桁揃えのため右詰めで出力
+    # し、"="の直後に可変長のスペースが入る (例:
+    # "start=          64, size=    3492416, type=0, bootable"、実機で
+    # 確認済み)。この桁揃え用スペース (半角スペースのみ。sfdiskの実出力に
+    # タブが使われる形跡はないため、タブは意図的に許容しない) を "="の
+    # 直後に限って許容したうえで、数値そのものは厳格に (先頭ゼロを含め
+    # 数字のみ) 抽出する。空白を許容するのはこの1点のみであり、
+    # 必須フィールド欠落・非数値・不正なtype表記・想定外の構造等、
+    # それ以外のfail-closed要件は一切緩めない。
+    PT_ENTRIES="$(printf '%s\n' "$body" | "$CMD_AWK" -F' : ' '
+        NF == 0 { next }
+        {
+            if (NF != 2) { print "PARSE_ERROR"; bad = 1; next }
+            devpath = $1
+            n = split($2, parts, ", ")
+            if (n < 3 || n > 4) { print "PARSE_ERROR"; bad = 1; next }
+            if (parts[1] !~ /^start= *[0-9]+$/) { print "PARSE_ERROR"; bad = 1; next }
+            if (parts[2] !~ /^size= *[0-9]+$/)  { print "PARSE_ERROR"; bad = 1; next }
+            if (parts[3] !~ /^type= *[0-9A-Fa-f]+$/) { print "PARSE_ERROR"; bad = 1; next }
+            bootable = 0
+            if (n == 4) {
+                if (parts[4] != "bootable") { print "PARSE_ERROR"; bad = 1; next }
+                bootable = 1
+            }
+            start = parts[1]; sub(/^start= */, "", start)
+            size  = parts[2]; sub(/^size= */,  "", size)
+            type  = parts[3]; sub(/^type= */,  "", type)
+            printf "%s|%s|%s|%s|%s\n", devpath, start, size, type, bootable
+        }
+        END { if (bad) exit 1 }
+    ')" || fail 32 "既存パーティション行の解析に失敗しました (想定外の形式): $DEVICE"
+
+    if printf '%s\n' "$PT_ENTRIES" | "$CMD_GREP" -Fxq 'PARSE_ERROR'; then
+        fail 32 "既存パーティション行の解析に失敗しました (想定外の形式): $DEVICE"
+    fi
+
+    PT_ENTRY_COUNT="$(printf '%s\n' "$PT_ENTRIES" | "$CMD_AWK" 'length($0)>0{c++} END{print c+0}')"
+    if [ -z "$PT_ENTRY_COUNT" ]; then
+        fail 32 "既存パーティション件数を取得できませんでした: $DEVICE"
+    fi
+    if [ "$PT_ENTRY_COUNT" -eq 0 ]; then
+        fail 32 "既存パーティションが1件も見つかりません (起動元USBとして想定外の状態です): $DEVICE"
+    fi
+
+    # 拡張パーティション (MBR type 5 / f / 0f) を含む構成は初版では未対応
+    # とする。論理パーティション内部の空き領域は対象にしない (README
+    # 4.5節参照)。
+    ext_rc=0
+    printf '%s\n' "$PT_ENTRIES" | while IFS='|' read -r _path _start _size type_v _boot; do
+        [ -n "$type_v" ] || continue
+        case "$type_v" in
+            5 | f | F | 0f | 0F)
+                exit 1
+                ;;
+        esac
+    done || ext_rc=$?
+    if [ "$ext_rc" -ne 0 ]; then
+        fail 32 "拡張パーティションを含む構成は現バージョンでは未対応です: $DEVICE"
+    fi
+
+    if [ "$PT_ENTRY_COUNT" -ge 4 ]; then
+        fail 33 "MBRのprimaryパーティション枠 (4件) が既に使用されています: $DEVICE"
+    fi
+}
+
+# ---- 末尾未使用領域の計算 (終了コード32/34/35) ------------------------------
+# 「全既存partitionの終端 (start+size) の最大値」を基準に、その直後を
+# 1MiB境界へ切り上げた位置を新規partitionの開始位置とする。既存
+# partition同士が (Hybrid ISOのように) 重なっていても、終端の最大値さえ
+# 正しく求まれば計算は影響を受けない。ディスク末尾には1MiB分の予備領域を
+# 残し (境界ぎりぎりまで使わない)、それでも最小サイズ
+# (SAME_USB_MIN_FREE_BYTES=1GiB) に満たなければ拒否する。
+#
+# 成功時に設定するグローバル変数: SAME_USB_START / SAME_USB_SIZE
+# (いずれもPT_SECTOR_SIZE単位のセクタ数)。
+compute_same_usb_target() {
+    fetch_partition_table
+
+    align_sectors=$((SAME_USB_ALIGN_BYTES / PT_SECTOR_SIZE))
+    if [ "$align_sectors" -le 0 ] || [ "$((align_sectors * PT_SECTOR_SIZE))" -ne "$SAME_USB_ALIGN_BYTES" ]; then
+        fail 32 "セクタサイズ (${PT_SECTOR_SIZE}) が1MiBアライメントと整合しません: $DEVICE"
+    fi
+
+    max_end="$(printf '%s\n' "$PT_ENTRIES" | "$CMD_AWK" -F'|' '
+        BEGIN { m = 0 }
+        NF >= 3 {
+            end = $2 + $3
+            if (end > m) m = end
+        }
+        END { print m }
+    ')" || fail 32 "既存パーティションの終端計算に失敗しました: $DEVICE"
+    case "$max_end" in
+        '' | *[!0-9]*)
+            fail 32 "既存パーティションの終端計算結果が不正です: $DEVICE"
+            ;;
+    esac
+
+    remainder=$((max_end % align_sectors))
+    if [ "$remainder" -eq 0 ]; then
+        new_start=$max_end
+    else
+        new_start=$((max_end + (align_sectors - remainder)))
+    fi
+
+    # ディスクの総セクタ数はblockdev --getsz (BLKGETSIZE ioctl) から取得
+    # する。--getsize64 (BLKGETSIZE64 ioctl) ではなくこちらを正本とする
+    # 理由: 実機検証で、--getsize64が失敗する個体でも --getsz は正しく
+    # 動作することを確認済みのため (より古く、広くサポートされている
+    # ioctlである)。blockdev --getszは常に512バイトセクタ単位で返る
+    # (blockdev --helpの記載どおり。lsblkのSTART列と同じ考え方で、対象
+    # diskの実際のlogical sector sizeには依存しない、GUI側のコメントも
+    # 参照)。ディスクサイズの取得・検証失敗は、末尾未使用領域が実際に
+    # 不足している場合 (終了コード34) とは原因が異なるため、区別できる
+    # 終了コード39を使う (GUI側のエラーメッセージも別文言にする)。
+    #
+    # "--" (end-of-options) は意図的に付けない。実機のutil-linux 2.41.5
+    # blockdevは "--" をend-of-optionsとして扱わず、"Unknown command: --"
+    # として拒否することを実機で確認済み ("blockdev --getsz -- DEVICE"は
+    # rc=1で失敗し、"blockdev --getsz DEVICE"はrc=0で正常動作する)。
+    # blockdevは他の多くのGNU系ツールと異なり "--" 規約に対応していない。
+    # DEVICEは既にvalidate_device_arg/reverify_deviceで/dev/*配下の
+    # 実在するblock deviceであることを検証済みであり、任意の文字列が
+    # 渡ることはないため、"--"省略によるオプション注入のリスクはない。
+    disk_sectors="$("$CMD_BLOCKDEV" --getsz "$DEVICE" 2>/dev/null)" || disk_sectors=''
+    case "$disk_sectors" in
+        '' | *[!0-9]*)
+            fail 39 "ディスクの総サイズを取得できませんでした (blockdev --getsz): $DEVICE"
+            ;;
+    esac
+    total_bytes=$((disk_sectors * 512))
+    if [ "$((total_bytes % PT_SECTOR_SIZE))" -ne 0 ]; then
+        fail 39 "ディスクの総サイズがセクタサイズの整数倍ではありません: $DEVICE"
+    fi
+    total_sectors=$((total_bytes / PT_SECTOR_SIZE))
+
+    usable_end=$(( (total_sectors / align_sectors) * align_sectors - align_sectors ))
+    if [ "$usable_end" -lt 0 ]; then
+        usable_end=0
+    fi
+
+    if [ "$new_start" -ge "$usable_end" ]; then
+        fail 34 "末尾に利用可能な未使用領域がありません: $DEVICE"
+    fi
+    new_size=$((usable_end - new_start))
+    free_bytes=$((new_size * PT_SECTOR_SIZE))
+    if [ "$free_bytes" -lt "$SAME_USB_MIN_FREE_BYTES" ]; then
+        fail 34 "末尾の未使用領域が最小サイズ (1GiB) 未満です (${free_bytes} バイト): $DEVICE"
+    fi
+
+    # 防御的な重なり再確認 (上記の計算上は発生し得ないが、明示的に確認する)。
+    overlap_rc=0
+    printf '%s\n' "$PT_ENTRIES" | while IFS='|' read -r _path start size _type _boot; do
+        [ -n "$start" ] && [ -n "$size" ] || continue
+        entry_end=$((start + size))
+        if [ "$new_start" -lt "$entry_end" ] && [ "$start" -lt "$((new_start + new_size))" ]; then
+            exit 1
+        fi
+    done || overlap_rc=$?
+    if [ "$overlap_rc" -ne 0 ]; then
+        fail 35 "計算した未使用領域が既存パーティションと重なっています: $DEVICE"
+    fi
+
+    SAME_USB_START="$new_start"
+    SAME_USB_SIZE="$new_size"
+}
+
+# ---- create-same-usb (Mode B) の予備検証一式 --------------------------------
+final_verification_same_usb() {
+    reverify_device 12 13
+    check_usb_transport
+    check_is_live_boot_disk
+    check_holders_empty
+    check_no_existing_label
+    check_no_existing_partlabel
+    compute_same_usb_target
+
+    # 破壊的操作直前の再検証 (reverify_same_usb_target) 用に、初回検証時の
+    # 計算結果と既存partition構成を記録しておく。
+    SAME_USB_BASELINE_ENTRIES="$PT_ENTRIES"
+    SAME_USB_BASELINE_PATHS="$(printf '%s\n' "$PT_ENTRIES" | "$CMD_AWK" -F'|' '{print $1}')"
+}
+
+# ---- 破壊的操作 (sfdisk --append) 直前の再検証 (終了コード35) --------------
+# TOCTOU窓の縮小のため、末尾未使用領域の計算と既存partition構成を
+# もう一度取得し、final_verification_same_usb時点の結果と完全一致する
+# ことを要求する。一致しない場合は、対象ディスクの構成がその間に変化した
+# 可能性があるため拒否する。
+reverify_same_usb_target() {
+    prev_start="$SAME_USB_START"
+    prev_size="$SAME_USB_SIZE"
+    prev_entries="$SAME_USB_BASELINE_ENTRIES"
+
+    compute_same_usb_target
+
+    if [ "$SAME_USB_START" != "$prev_start" ] || [ "$SAME_USB_SIZE" != "$prev_size" ]; then
+        fail 35 "再検証: 末尾未使用領域の計算結果が初回検証時と一致しません (対象ディスクの構成が変化した可能性があります): $DEVICE"
+    fi
+    if [ "$PT_ENTRIES" != "$prev_entries" ]; then
+        fail 35 "再検証: 既存パーティション構成が初回検証時と一致しません: $DEVICE"
+    fi
+}
+
+# ---- 追加操作後、既存partitionが変化していないことの検出 (終了コード37) ----
+# 注意: この時点で sfdisk --append は既にディスクへ書き込み済みである。
+# 以下の検証は「書き込みを未然に防ぐ」ものではなく、「意図しない変化を
+# 検出し、それ以上の処理 (mkfs等) へ進むことを止める」ためのサーキット
+# ブレーカーである。baselineの各既存partition (devpathで対応付け) が、
+# start/size/type/bootableとも完全に一致することを、順序に依存しない形で
+# 確認する。
+verify_existing_entries_unchanged() {
+    fetch_partition_table
+
+    mismatch_rc=0
+    printf '%s\n' "$SAME_USB_BASELINE_ENTRIES" | while IFS='|' read -r b_path b_start b_size b_type b_boot; do
+        [ -n "$b_path" ] || continue
+        expected="$(printf '%s|%s|%s|%s|%s' "$b_path" "$b_start" "$b_size" "$b_type" "$b_boot")"
+        actual="$(printf '%s\n' "$PT_ENTRIES" | "$CMD_AWK" -F'|' -v p="$b_path" '$1==p{print; f=1} END{if(!f) exit 1}')" || exit 1
+        if [ "$actual" != "$expected" ]; then
+            exit 1
+        fi
+    done || mismatch_rc=$?
+
+    if [ "$mismatch_rc" -ne 0 ]; then
+        fail 37 "パーティション追加後、既存パーティションの内容に意図しない変化を検出したため処理を停止します (書込みは既に発生しています。手動での状態確認が必要です): $DEVICE"
+    fi
+}
+
+# ---- sfdisk --append自体が失敗した場合の診断 (終了コード36) ----------------
+# sfdiskがnonzeroで終了した場合、「ディスクは変更されていない」とは断定
+# しない (単一セクタ書込みは慣習的に原子的とみなせるが、それを安全側の
+# 前提として断言することはしない、という設計レビューでの指摘に基づく)。
+# 代わりに、読み取り専用のsfdisk --dumpを再実行し、baseline
+# (final_verification_same_usb時点、SAME_USB_BASELINE_ENTRIES) と比較
+# したうえで、以下のいずれかを診断結果としてstderrへ含める。
+#   unchanged - baselineと完全に一致 (変更なしと判断できる)
+#   changed   - baselineと異なる (何らかの変更が発生している)
+#   unknown   - sfdisk --dump自体の失敗や解析失敗により判定できない
+# この関数自身は読み取り専用であり、いかなる書込み・自動復元も行わない。
+# また、この関数自体が失敗しても必ず何らかの文字列を返すのみとし、
+# 呼び出し元 (fail 36) の実行を妨げない (元の失敗原因を隠さないことを
+# 最優先する)。
+diagnose_disk_state_after_sfdisk_failure() {
+    diag_dump="$("$CMD_SFDISK" --dump -- "$DEVICE" 2>/dev/null)" || diag_dump=''
+    if [ -z "$diag_dump" ]; then
+        printf 'unknown (sfdisk --dumpで読み取れませんでした)'
+        return 0
+    fi
+
+    diag_body="$(printf '%s\n' "$diag_dump" | "$CMD_AWK" 'blank{print} /^$/{blank=1}')"
+    diag_entries="$(printf '%s\n' "$diag_body" | "$CMD_AWK" -F' : ' '
+        NF == 0 { next }
+        {
+            if (NF != 2) { print "PARSE_ERROR"; bad = 1; next }
+            devpath = $1
+            n = split($2, parts, ", ")
+            if (n < 3 || n > 4) { print "PARSE_ERROR"; bad = 1; next }
+            if (parts[1] !~ /^start= *[0-9]+$/) { print "PARSE_ERROR"; bad = 1; next }
+            if (parts[2] !~ /^size= *[0-9]+$/)  { print "PARSE_ERROR"; bad = 1; next }
+            if (parts[3] !~ /^type= *[0-9A-Fa-f]+$/) { print "PARSE_ERROR"; bad = 1; next }
+            bootable = 0
+            if (n == 4) {
+                if (parts[4] != "bootable") { print "PARSE_ERROR"; bad = 1; next }
+                bootable = 1
+            }
+            start = parts[1]; sub(/^start= */, "", start)
+            size  = parts[2]; sub(/^size= */,  "", size)
+            type  = parts[3]; sub(/^type= */,  "", type)
+            printf "%s|%s|%s|%s|%s\n", devpath, start, size, type, bootable
+        }
+        END { if (bad) exit 1 }
+    ')" && diag_parse_rc=0 || diag_parse_rc=$?
+    if [ "$diag_parse_rc" -ne 0 ] || printf '%s\n' "$diag_entries" | "$CMD_GREP" -Fxq 'PARSE_ERROR' 2>/dev/null; then
+        printf 'unknown (パーティション行を解析できませんでした)'
+        return 0
+    fi
+
+    if [ "$diag_entries" = "$SAME_USB_BASELINE_ENTRIES" ]; then
+        printf 'unchanged (既存パーティション構成はbaselineと一致)'
+    else
+        printf 'changed (既存パーティション構成がbaselineと異なります。手動での状態確認が必要です)'
+    fi
+}
+
+# ---- 新規パーティション番号の特定 (disk-contentベース、終了コード38) -------
+# sfdisk --append --no-tell-kernelの直後は、カーネルがまだ新規パーティ
+# ションを認識していないため、lsblk (kernel視点) では特定できない。
+# 直前のverify_existing_entries_unchangedが再取得したPT_ENTRIES
+# (sfdisk --dump、disk-content視点、kernelの状態に依存しない) から、
+# baseline (SAME_USB_BASELINE_PATHS) に存在しなかった新規devpathを特定し、
+# partx --add --nr へ渡すパーティション番号を算出する。
+identify_new_partition_number_from_dump() {
+    ndn_new_paths="$(printf '%s\n' "$PT_ENTRIES" | "$CMD_AWK" -F'|' '{print $1}' | while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        if printf '%s\n' "$SAME_USB_BASELINE_PATHS" | "$CMD_GREP" -Fxq -- "$p"; then
+            continue
+        fi
+        printf '%s\n' "$p"
+    done)" || fail 38 "disk上での新規パーティションの特定に失敗しました: $DEVICE"
+
+    if ! ndn_count="$(printf '%s\n' "$ndn_new_paths" | "$CMD_AWK" 'length($0)>0{c++} END{print c+0}')"; then
+        fail 38 "disk上の新規パーティション件数の取得に失敗しました: $DEVICE"
+    fi
+    case "$ndn_count" in
+        '' | *[!0-9]*)
+            fail 38 "disk上の新規パーティション件数が不正な形式です: $DEVICE"
+            ;;
+    esac
+    if [ "$ndn_count" -ne 1 ]; then
+        fail 38 "disk上で新規に追加されたパーティションを一意に特定できませんでした (検出数: $ndn_count): $DEVICE"
+    fi
+
+    ndn_devpath="$(printf '%s\n' "$ndn_new_paths" | "$CMD_AWK" 'length($0)>0{print; exit}')" \
+        || fail 38 "新規パーティションのdevpathの取得に失敗しました: $DEVICE"
+
+    # devpathから$DEVICEプレフィックスを除いた残りを、パーティション番号
+    # として取り出す (MBRのprimaryパーティションの命名規則: $DEVICE + N。
+    # Mode Bの対象はTRAN=usbの単純なwhole diskに限定されており、
+    # nvme/mmcblk系の "pN" 命名は現状の対象外である)。
+    case "$ndn_devpath" in
+        "$DEVICE"[0-9]*)
+            SAME_USB_NEW_PART_NR="${ndn_devpath#"$DEVICE"}"
+            ;;
+        *)
+            fail 38 "新規パーティションのdevpath ($ndn_devpath) からパーティション番号を特定できませんでした: $DEVICE"
+            ;;
+    esac
+    case "$SAME_USB_NEW_PART_NR" in
+        '' | *[!0-9]*)
+            fail 38 "新規パーティション番号の形式が不正です (devpath: $ndn_devpath): $DEVICE"
+            ;;
+    esac
+    SAME_USB_NEW_PART_DEVPATH="$ndn_devpath"
+}
+
+# ---- 新規追加されたパーティションの特定・検証 (終了コード38) ---------------
+# identify_created_partition (Mode A) は「子パーティションが厳密に1件」を
+# 前提とするが、Mode Bでは既存partitionが1件以上残ったまま新規に1件が
+# 追加されるため、この前提が成立しない。代わりに、
+# final_verification_same_usb時点のPATH集合 (SAME_USB_BASELINE_PATHS) に
+# 含まれない新規PATHを差分で特定する。
+identify_new_partition_since_baseline() {
+    # 変数名はidentify_created_partition (Mode A) と意図的に別名にする
+    # (part_path等の再利用による、テスト計装ツール
+    # (instrument_helper.sh) の厳密な出現件数一致チェックとの衝突を
+    # 避けるため)。
+    np_rows="$("$CMD_LSBLK" -b -P -o NAME,PATH,TYPE,PKNAME,MAJ:MIN -- "$DEVICE" 2>/dev/null)" || np_rows=''
+    if [ -z "$np_rows" ]; then
+        fail 38 "パーティション情報を取得できませんでした: $DEVICE"
+    fi
+
+    np_matches="$(printf '%s\n' "$np_rows" | while IFS= read -r line; do
+        np_path_v="$(printf '%s\n' "$line" | extract_field PATH)" || exit 1
+        np_type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || exit 1
+        np_pkname_v="$(printf '%s\n' "$line" | extract_field PKNAME)" || exit 1
+        np_majmin_v="$(printf '%s\n' "$line" | extract_field 'MAJ:MIN')" || exit 1
+        [ -n "$np_path_v" ] || exit 1
+        [ -n "$np_type_v" ] || exit 1
+        [ -n "$np_majmin_v" ] || exit 1
+        if [ "$np_type_v" != 'part' ]; then
+            continue
+        fi
+        if printf '%s\n' "$SAME_USB_BASELINE_PATHS" | "$CMD_GREP" -Fxq -- "$np_path_v"; then
+            continue
+        fi
+        printf '%s|%s|%s\n' "$np_path_v" "$np_pkname_v" "$np_majmin_v"
+    done)" || fail 38 "パーティション情報の解析に失敗しました: $DEVICE"
+
+    if ! np_match_count="$(printf '%s\n' "$np_matches" | "$CMD_AWK" 'length($0)>0{c++} END{print c+0}')"; then
+        fail 38 "新規パーティション件数の取得に失敗しました: $DEVICE"
+    fi
+    case "$np_match_count" in
+        '' | *[!0-9]*)
+            fail 38 "新規パーティション件数が不正な形式です (取得値: ${np_match_count:-取得不可}): $DEVICE"
+            ;;
+    esac
+    if [ "$np_match_count" -ne 1 ]; then
+        fail 38 "新規に作成されたパーティションを一意に特定できませんでした (検出数: $np_match_count): $DEVICE"
+    fi
+
+    new_part_path="$(printf '%s\n' "$np_matches" | "$CMD_AWK" -F'|' '{print $1}')" \
+        || fail 38 "新規パーティションのPATHの取得に失敗しました: $DEVICE"
+    new_part_pkname="$(printf '%s\n' "$np_matches" | "$CMD_AWK" -F'|' '{print $2}')" \
+        || fail 38 "新規パーティションのPKNAMEの取得に失敗しました: $DEVICE"
+    new_part_majmin="$(printf '%s\n' "$np_matches" | "$CMD_AWK" -F'|' '{print $3}')" \
+        || fail 38 "新規パーティションのMAJOR:MINORの取得に失敗しました: $DEVICE"
+
+    case "$new_part_path" in
+        /dev/*) ;;
+        *)
+            fail 38 "新規パーティションのPATHが/dev以下ではありません: $new_part_path"
+            ;;
+    esac
+
+    new_part_parent="${new_part_path%/*}"
+    if [ "$new_part_parent" != '/dev' ]; then
+        fail 38 "新規パーティションのPATHが/dev直下ではありません: $new_part_path"
+    fi
+
+    if [ -L "$new_part_path" ]; then
+        fail 38 "新規パーティションがシンボリックリンクです: $new_part_path"
+    fi
+
+    if [ ! -b "$new_part_path" ]; then
+        fail 38 "新規パーティションが実在するブロックデバイスではありません: $new_part_path"
+    fi
+
+    if [ -z "$new_part_pkname" ] || [ "$new_part_pkname" != "$DEVICE_KNAME" ]; then
+        fail 38 "新規パーティションのPKNAMEが対象ディスクと一致しません: $new_part_path"
+    fi
+
+    new_part_ro="$("$CMD_LSBLK" -dn -o RO -- "$new_part_path" 2>/dev/null)" || new_part_ro=''
+    if [ "$new_part_ro" != '0' ]; then
+        fail 38 "新規パーティションが読み取り専用です: $new_part_path"
+    fi
+
+    CREATED_PART_PATH="$new_part_path"
+    CREATED_PART_MAJMIN="$new_part_majmin"
+}
+
+# ---- 新規パーティションの実ジオメトリ検証 (終了コード38、mkfs直前) --------
+# sfdisk --append自体が成功し、lsblk側でも新規partitionを特定できた
+# だけでは、mkfsへ進む十分条件としない。sfdisk --dump基準 (verify_
+# existing_entries_unchangedが直前に再取得した$PT_ENTRIES、post-append
+# の状態) で、新規partition自身の実際のstart/size/typeを次の全条件で
+# 確認する。1つでも満たさなければmkfsへは進まず拒否する。
+#   - actual start == 計算値 (SAME_USB_START)
+#   - actual size  == 計算値 (SAME_USB_SIZE)
+#   - actual type  == 83 (SAME_USB_PART_TYPE)
+#   - actual start >= 既存 (baseline) partition全件の終端の最大値
+#     (実装上、常に厳密な等号ではなく "以上" を許容する。1MiB境界上に
+#     既存partitionの終端がちょうど乗っている場合、新規partitionの
+#     startはその境界と完全に一致し得るため、「既存終端より厳密に
+#     後ろ」を要求すると、隙間なく正しく隣接した正常なケースまで
+#     誤って拒否してしまう)
+#   - actual end (= start + size) <= ディスクの総セクタ数
+#
+# $PT_ENTRIES / $SAME_USB_BASELINE_ENTRIES は、直前のverify_existing_
+# entries_unchanged / final_verification_same_usbの呼び出しで設定済み
+# であることを前提とする (このため、本関数はrun_mode_create_same_usb
+# 内でこれらの直後にのみ呼び出す)。
+verify_new_partition_geometry() {
+    row="$(printf '%s\n' "$PT_ENTRIES" | "$CMD_AWK" -F'|' -v p="$CREATED_PART_PATH" '$1==p{print; f=1} END{if(!f) exit 1}')" \
+        || fail 38 "sfdisk側で新規パーティションの情報が見つかりません: $CREATED_PART_PATH"
+
+    actual_start="$(printf '%s' "$row" | "$CMD_AWK" -F'|' '{print $2}')"
+    actual_size="$(printf '%s' "$row" | "$CMD_AWK" -F'|' '{print $3}')"
+    actual_type="$(printf '%s' "$row" | "$CMD_AWK" -F'|' '{print $4}')"
+
+    case "$actual_start" in
+        '' | *[!0-9]*)
+            fail 38 "新規パーティションのstartを取得できませんでした: $CREATED_PART_PATH"
+            ;;
+    esac
+    case "$actual_size" in
+        '' | *[!0-9]*)
+            fail 38 "新規パーティションのsizeを取得できませんでした: $CREATED_PART_PATH"
+            ;;
+    esac
+
+    if [ "$actual_start" != "$SAME_USB_START" ]; then
+        fail 38 "新規パーティションのstart (${actual_start}) が計算値 (${SAME_USB_START}) と一致しません: $CREATED_PART_PATH"
+    fi
+    if [ "$actual_size" != "$SAME_USB_SIZE" ]; then
+        fail 38 "新規パーティションのsize (${actual_size}) が計算値 (${SAME_USB_SIZE}) と一致しません: $CREATED_PART_PATH"
+    fi
+    if [ "$actual_type" != "$SAME_USB_PART_TYPE" ]; then
+        fail 38 "新規パーティションのMBR type (${actual_type:-取得不可}) が想定値 (${SAME_USB_PART_TYPE}) と一致しません: $CREATED_PART_PATH"
+    fi
+
+    max_baseline_end="$(printf '%s\n' "$SAME_USB_BASELINE_ENTRIES" | "$CMD_AWK" -F'|' '
+        BEGIN { m = 0 }
+        NF >= 3 {
+            end = $2 + $3
+            if (end > m) m = end
+        }
+        END { print m }
+    ')" || fail 38 "既存パーティションの終端再計算に失敗しました: $DEVICE"
+    case "$max_baseline_end" in
+        '' | *[!0-9]*)
+            fail 38 "既存パーティションの終端再計算結果が不正です: $DEVICE"
+            ;;
+    esac
+    if [ "$actual_start" -lt "$max_baseline_end" ]; then
+        fail 38 "新規パーティションのstartが既存パーティションの終端より前です: $CREATED_PART_PATH"
+    fi
+
+    # compute_same_usb_targetと同じ理由でblockdev --getsz (BLKGETSIZE
+    # ioctl) を正本とする (--getsize64ではなく)。"--"を付けない理由も
+    # 同じ (実機のutil-linux 2.41.5 blockdevは"--"をend-of-optionsとして
+    # 扱わず、"Unknown command: --"として拒否することを実機で確認済み)。
+    disk_sectors="$("$CMD_BLOCKDEV" --getsz "$DEVICE" 2>/dev/null)" || disk_sectors=''
+    case "$disk_sectors" in
+        '' | *[!0-9]*)
+            fail 38 "ディスクの総サイズを再取得できませんでした (blockdev --getsz): $DEVICE"
+            ;;
+    esac
+    total_bytes=$((disk_sectors * 512))
+    if [ "$((total_bytes % PT_SECTOR_SIZE))" -ne 0 ]; then
+        fail 38 "ディスクの総サイズがセクタサイズの整数倍ではありません: $DEVICE"
+    fi
+    total_sectors=$((total_bytes / PT_SECTOR_SIZE))
+    actual_end=$((actual_start + actual_size))
+    if [ "$actual_end" -gt "$total_sectors" ]; then
+        fail 38 "新規パーティションの終端がディスク範囲を超えています: $CREATED_PART_PATH"
+    fi
+}
+
 # ---- 作成したパーティションの特定・検証 (終了コード21) ---------------------
 # デバイス名の単純連結 ("1"やp1の付加) はしない。検出数が厳密に1件で
 # あることに加え、PATHが/dev直下であること・シンボリックリンクでない
@@ -952,6 +1687,248 @@ check_created_partition_no_signature() {
     fi
 }
 
+# ---- モードごとの処理 (destructive操作の開始からパーティション特定まで) ----
+# mkfs以降 (finalize_persistence_filesystem) は create/create-same-usb で
+# 完全に共通のため、共有関数として1箇所にまとめる。
+
+# create (Mode A): 既存動作を一切変更しない (destructive操作より前の
+# 検証・parted呼び出し・identify_created_partitionまでの処理・順序は
+# 本機能追加以前と完全に同一)。
+run_mode_create() {
+    final_verification
+
+    # final_verification完了からpartedによる破壊的操作開始までの間隙を
+    # さらに縮小するため、直前にもう一度DEVICEの基本属性を再検証する。
+    # ここはまだ破壊的操作 (parted) の前であるため、失敗時は12/13
+    # (破壊的操作開始前の拒否) を使う。
+    reverify_device 12 13
+    check_signal
+
+    stage 'gpt'
+    if ! "$CMD_PARTED" -s -- "$DEVICE" mklabel gpt; then
+        fail 20 "GPTパーティションテーブルの作成に失敗しました: $DEVICE"
+    fi
+    check_signal
+
+    stage 'partition'
+    if ! "$CMD_PARTED" -s -- "$DEVICE" mkpart persistence ext4 1MiB 100%; then
+        fail 21 "persistenceパーティションの作成に失敗しました: $DEVICE"
+    fi
+
+    if ! "$CMD_PARTPROBE" -- "$DEVICE"; then
+        fail 21 "partprobeによるパーティション情報の再読込に失敗しました: $DEVICE"
+    fi
+
+    if ! "$CMD_UDEVADM" settle; then
+        fail 21 "udevadm settleに失敗しました: $DEVICE"
+    fi
+
+    identify_created_partition
+    check_created_partition_no_signature
+    check_signal
+
+    # mkfs直前にも、親DEVICEのPATH/KNAME/TYPE/RO/MAJOR:MINORと、作成された
+    # パーティション自身のPATH/TYPE/PKNAME/RO/MAJOR:MINOR (block device・
+    # 非symlinkも含む) の両方を改めて確認する (TOCTOU窓のさらなる縮小)。
+    # この時点ではGPT/パーティションを既に作成済みであり、12/13
+    # (破壊的操作開始前の拒否) を返すことは許されないため、DEVICE系・
+    # MAJOR:MINOR系のいずれの不一致も21 (破壊的操作後の途中失敗) を使う。
+    reverify_device 21 21
+    reverify_created_partition
+    check_signal
+}
+
+# create-same-usb (Mode B)
+run_mode_create_same_usb() {
+    check_required_commands_same_usb
+    final_verification_same_usb
+
+    # 破壊的操作 (sfdisk --append) 開始直前に、末尾未使用領域の計算と
+    # 既存パーティション構成を再検証する (TOCTOU窓の縮小)。この時点は
+    # まだ破壊的操作の前であるため、DEVICE系の不一致は12/13を使う。
+    reverify_device 12 13
+    reverify_same_usb_target
+    check_signal
+
+    stage 'sfdisk-backup'
+    # 変更前のパーティションテーブルのバックアップ先ディレクトリを用意
+    # する。このディレクトリはMNT_DIR/LOCK_DIRと同じtrap経由の後始末
+    # (on_exit) で、成功・失敗・シグナル終了いずれの場合も必ず削除する
+    # 一時ファイルとして扱う (永続的なバックアップ保存は要求しない。
+    # 保持し続けること自体が追加のリスクになるため、自動復元を行わない
+    # 方針と同じ考え方である)。/run配下はtmpfsであり、たとえ削除に失敗
+    # しても次回起動時には自然に消える。
+    SFDISK_BACKUP_DIR="$("$CMD_MKTEMP" -d /run/mypocketos-persistence-setup-helper.sfdisk-backup.XXXXXX 2>/dev/null)" \
+        || fail 36 'sfdiskバックアップ用の一時ディレクトリを作成できませんでした。'
+    check_signal
+
+    stage 'sfdisk-append'
+    # --lock=yes: sfdisk自身によるカーネルレベルの排他ロック (GUI/helper
+    # 既存のmkdirロックとは別の防御層として追加する)。
+    # --backup -O <dir>/pt: 書き込み直前の生のMBRセクタをSFDISK_BACKUP_DIR
+    # 配下へバックアップする (このプロセスの後始末で削除される一時ファイル)。
+    # --no-reread --no-tell-kernel: Live起動元USB自身 (sda1がマウント中の
+    # ディスク) へパーティションを追加するMode B特有の要件。実機で
+    # 「This disk is currently in use ...」によりsfdisk --append自体が
+    # 失敗する不具合が確認されたため追加した (設計レビュー参照)。
+    # --no-rereadは、パーティションテーブル再読込ioctl (BLKRRPART) による
+    # 「デバイス使用中」チェックそのものを無効化する。--no-tell-kernelは、
+    # 書込み後にsfdisk自身がカーネルへ変更を通知する処理 (同じくBLKRRPART
+    # 系統) を無効化する。man sfdiskはこの2つを併用することを明示的に
+    # 推奨している。カーネルへの通知は、この後のpartx --add --nrで新規
+    # パーティションのみを対象に個別に行う (sda1/sda2の既存カーネル登録
+    # には一切触れない)。--forceは意図的に使用しない (「整合性チェックを
+    # 一切行わないようにする」という広すぎる範囲のオプションであり、
+    # 今回避けたいのは使用中チェック1点のみであるため)。
+    #
+    # 診断用計装 (実USBでの失敗原因調査のため): これまでstderrを
+    # >/dev/null 2>&1 で完全に捨てていたため、実機で失敗した際に原因を
+    # 一切確認できなかった。stdoutは引き続き捨てる一方、stderrと実際の
+    # 終了コードのみ変数へ捕捉し、失敗時にfail()経由でGUIの「詳細:」欄
+    # (WORK_DIR/helper.stderr、GUI側で末尾20行・2000文字に切り詰めて
+    # 表示済み) へ渡す。
+    # "cmd" && rc=0 || rc=$? の形にするのは、"set -e"下で
+    # 'var="$(failing-cmd)"' が単独では即座にスクリプトを終了させてしまい
+    # (代入自体が失敗コマンドとして扱われるため)、以降のfail()呼び出しに
+    # 到達できなくなるのを避けるため (他のCMD_*呼び出し箇所と同様、
+    # 失敗を"$?"として捕捉してから明示的に分岐する)。
+    sfdisk_append_stdin="$(printf 'start=%s, size=%s, type=%s' "$SAME_USB_START" "$SAME_USB_SIZE" "$SAME_USB_PART_TYPE")"
+    sfdisk_append_err="$(printf '%s\n' "$sfdisk_append_stdin" \
+        | "$CMD_SFDISK" --lock=yes --backup -O "$SFDISK_BACKUP_DIR/pt" --no-reread --no-tell-kernel --append -- "$DEVICE" 2>&1 >/dev/null)" \
+        && sfdisk_append_rc=0 || sfdisk_append_rc=$?
+    if [ "$sfdisk_append_rc" -ne 0 ]; then
+        # 外部コマンドの出力をそのままGUI表示へ渡すため、行数・1行あたりの
+        # 文字数の両方を抑えておく (GUI側の切り詰めとは独立した、helper
+        # 自身での抑制。機密情報は含まれない想定だが、過大な出力の表示だけ
+        # は避ける)。
+        sfdisk_append_err_short="$(printf '%s\n' "$sfdisk_append_err" \
+            | "$CMD_AWK" 'NR>10{print "…(以降省略)"; exit} {print (length($0)>300) ? substr($0,1,300) "…(省略)" : $0}')"
+        # sfdiskがnonzeroで終了した場合、「ディスクは変更されていない」
+        # とは断定しない。読み取り専用のsfdisk --dumpでbaselineと比較した
+        # 診断結果 (unchanged/changed/unknown) を付記するのみとし、
+        # 自動ロールバックは一切行わない。
+        sfdisk_append_diag="$(diagnose_disk_state_after_sfdisk_failure)"
+        fail 36 "既存パーティションテーブルへの追加操作 (sfdisk --append) に失敗しました: $DEVICE / 実行コマンド: sfdisk --lock=yes --backup -O $SFDISK_BACKUP_DIR/pt --no-reread --no-tell-kernel --append -- $DEVICE / stdin: [$sfdisk_append_stdin] / sfdisk終了コード: $sfdisk_append_rc / sfdisk stderr: [$sfdisk_append_err_short] / 追加操作後のディスク状態診断: $sfdisk_append_diag"
+    fi
+
+    stage 'sfdisk-verify-existing-unchanged'
+    verify_existing_entries_unchanged
+    check_signal
+
+    stage 'identify-new-partition-number'
+    identify_new_partition_number_from_dump
+
+    stage 'partx-add'
+    # sfdisk --no-tell-kernelにより、この時点ではまだカーネルは新規
+    # パーティションを認識していない (sda1/sda2の既存カーネル登録は
+    # 一切変更していない)。partx --add --nr <N>で、新規パーティション
+    # 番号のみをカーネルへ個別に登録する (man partx: 「partxでパーティ
+    # ションを登録・削除しても、ディスクが変更されるわけではない。
+    # ディスク上のパーティションについて、その存在と番号をカーネルに
+    # 知らせているだけ」)。sfdisk --appendと同じ診断計装パターンを使う。
+    partx_add_err="$("$CMD_PARTX" --add --nr "$SAME_USB_NEW_PART_NR" -- "$DEVICE" 2>&1 >/dev/null)" \
+        && partx_add_rc=0 || partx_add_rc=$?
+    if [ "$partx_add_rc" -ne 0 ]; then
+        partx_add_err_short="$(printf '%s\n' "$partx_add_err" \
+            | "$CMD_AWK" 'NR>10{print "…(以降省略)"; exit} {print (length($0)>300) ? substr($0,1,300) "…(省略)" : $0}')"
+        # パーティションテーブルへの書込み自体は既に成功しており
+        # (sda1/sda2の内容も直前のverify_existing_entries_unchangedで
+        # 不変を確認済み)、新規パーティションをカーネルへ認識させる処理
+        # だけが失敗した状態である。ここでの自動リトライ・自動復元は
+        # 行わない。GUI側は「再起動すれば作成をやり直せる」という誤解を
+        # 招く表現を避け、既に書込み済みであることと、状態確認が必要な
+        # ことを案内する (result_message_forの40番参照)。
+        fail 40 "パーティションテーブルへの書き込みは完了しましたが、新規パーティション (番号 $SAME_USB_NEW_PART_NR、$SAME_USB_NEW_PART_DEVPATH) をカーネルへ登録する処理 (partx --add) に失敗しました: $DEVICE / 実行コマンド: partx --add --nr $SAME_USB_NEW_PART_NR -- $DEVICE / partx終了コード: $partx_add_rc / partx stderr: [$partx_add_err_short]"
+    fi
+
+    stage 'partx-udevadm-settle'
+    if ! "$CMD_UDEVADM" settle; then
+        fail 40 "パーティションテーブルへの書き込みと新規パーティション (番号 $SAME_USB_NEW_PART_NR) のカーネルへの登録は完了しましたが、udevadm settle (デバイスノード作成待ち) に失敗しました: $DEVICE"
+    fi
+    check_signal
+
+    identify_new_partition_since_baseline
+
+    # identify_new_partition_number_from_dump (disk-content視点、sfdisk
+    # --dumpベース) と identify_new_partition_since_baseline (kernel視点、
+    # lsblkベース) が同一のパーティションを指していることを確認する
+    # (2つの独立した視点による多重検証。万一一致しない場合は、競合等に
+    # より別のパーティションが新規追加されたと判断し、安全側で拒否する)。
+    if [ "$CREATED_PART_PATH" != "$SAME_USB_NEW_PART_DEVPATH" ]; then
+        fail 38 "disk上で特定した新規パーティション ($SAME_USB_NEW_PART_DEVPATH) と、カーネル登録後にlsblkで特定した新規パーティション ($CREATED_PART_PATH) が一致しません: $DEVICE"
+    fi
+
+    # 新規追加されたパーティションの実際のstart/size/typeが計算値・
+    # 期待値と一致すること、既存パーティションの終端より後ろにあること、
+    # ディスク範囲内に収まっていることを、mkfs実行前に確認する
+    # (終了コード38。1つでも不一致であればmkfsへは進まず拒否する)。
+    verify_new_partition_geometry
+
+    check_created_partition_no_signature
+    check_signal
+
+    # mkfs直前にも、親DEVICEとCREATED_PART_PATHの両方を改めて確認する
+    # (TOCTOU窓のさらなる縮小)。この時点では既にsfdisk --appendを実行
+    # 済みであり、12/13 (破壊的操作開始前の拒否) を返すことは許されない
+    # ため、DEVICE系の不一致は38 (追加操作後の途中失敗) を使う。
+    reverify_device 38 38
+    reverify_created_partition
+    check_signal
+}
+
+# ---- mkfs以降 (create/create-same-usb 共通) ---------------------------------
+finalize_persistence_filesystem() {
+    stage 'mkfs'
+    # 新規作成・親子関係まで検証済みのパーティションのみを対象とするため、
+    # 本番コードでは mkfs.ext4 の -F (強制実行) は使用しない。標準入力は
+    # /dev/null に接続し、想定外の確認プロンプトで待機しないようにする。
+    if ! "$CMD_MKFS_EXT4" -q -L persistence -- "$CREATED_PART_PATH" < /dev/null; then
+        fail 22 "ext4ファイルシステムの作成に失敗しました: $CREATED_PART_PATH"
+    fi
+    check_signal
+
+    stage 'mount'
+    MNT_DIR="$("$CMD_MKTEMP" -d /run/mypocketos-persistence-setup-helper.XXXXXX 2>/dev/null)" \
+        || fail 23 '一時作業ディレクトリの作成に失敗しました。'
+    check_signal
+
+    if ! "$CMD_MOUNT" -- "$CREATED_PART_PATH" "$MNT_DIR"; then
+        fail 23 "一時マウントに失敗しました: $CREATED_PART_PATH -> $MNT_DIR"
+    fi
+    MOUNTED=1
+    check_signal
+
+    stage 'conf'
+    CONF_PATH="$MNT_DIR/persistence.conf"
+    if ! printf '/home\n' > "$CONF_PATH"; then
+        fail 24 "persistence.confの書き込みに失敗しました: $CONF_PATH"
+    fi
+
+    # 書き込んだ内容を機械的に検証する ("/home" + 改行1つ = 6バイトちょうど)。
+    conf_size="$("$CMD_STAT" -c '%s' -- "$CONF_PATH" 2>/dev/null)" || conf_size=''
+    if [ "$conf_size" != '6' ]; then
+        fail 24 "persistence.confの内容確認に失敗しました (サイズ: ${conf_size:-取得不可} バイト): $CONF_PATH"
+    fi
+    conf_content="$("$CMD_CAT" -- "$CONF_PATH" 2>/dev/null)" || conf_content=''
+    if [ "$conf_content" != '/home' ]; then
+        fail 24 "persistence.confの内容確認に失敗しました (内容不一致): $CONF_PATH"
+    fi
+    check_signal
+
+    stage 'sync'
+    if ! "$CMD_SYNC"; then
+        fail 25 'syncに失敗しました。'
+    fi
+    check_signal
+
+    stage 'umount'
+    if ! "$CMD_UMOUNT" -- "$MNT_DIR"; then
+        fail 25 "アンマウントに失敗しました: $MNT_DIR"
+    fi
+    MOUNTED=0
+    check_signal
+}
+
 # ---- メイン処理 ------------------------------------------------------------
 
 check_required_commands
@@ -960,97 +1937,17 @@ check_live_env
 validate_device_arg "$DEVICE_ARG"
 validate_majmin "$MAJMIN_ARG"
 acquire_lock
-final_verification
 
-# final_verification完了からpartedによる破壊的操作開始までの間隙を
-# さらに縮小するため、直前にもう一度DEVICEの基本属性を再検証する。
-# ここはまだ破壊的操作 (parted) の前であるため、失敗時は12/13
-# (破壊的操作開始前の拒否) を使う。
-reverify_device 12 13
-check_signal
+case "$OP" in
+    create)
+        run_mode_create
+        ;;
+    create-same-usb)
+        run_mode_create_same_usb
+        ;;
+esac
 
-stage 'gpt'
-if ! "$CMD_PARTED" -s -- "$DEVICE" mklabel gpt; then
-    fail 20 "GPTパーティションテーブルの作成に失敗しました: $DEVICE"
-fi
-check_signal
-
-stage 'partition'
-if ! "$CMD_PARTED" -s -- "$DEVICE" mkpart persistence ext4 1MiB 100%; then
-    fail 21 "persistenceパーティションの作成に失敗しました: $DEVICE"
-fi
-
-if ! "$CMD_PARTPROBE" -- "$DEVICE"; then
-    fail 21 "partprobeによるパーティション情報の再読込に失敗しました: $DEVICE"
-fi
-
-if ! "$CMD_UDEVADM" settle; then
-    fail 21 "udevadm settleに失敗しました: $DEVICE"
-fi
-
-identify_created_partition
-check_created_partition_no_signature
-check_signal
-
-# mkfs直前にも、親DEVICEのPATH/KNAME/TYPE/RO/MAJOR:MINORと、作成された
-# パーティション自身のPATH/TYPE/PKNAME/RO/MAJOR:MINOR (block device・
-# 非symlinkも含む) の両方を改めて確認する (TOCTOU窓のさらなる縮小)。
-# この時点ではGPT/パーティションを既に作成済みであり、12/13
-# (破壊的操作開始前の拒否) を返すことは許されないため、DEVICE系・
-# MAJOR:MINOR系のいずれの不一致も21 (破壊的操作後の途中失敗) を使う。
-reverify_device 21 21
-reverify_created_partition
-check_signal
-
-stage 'mkfs'
-# 新規作成・親子関係まで検証済みのパーティションのみを対象とするため、
-# 本番コードでは mkfs.ext4 の -F (強制実行) は使用しない。標準入力は
-# /dev/null に接続し、想定外の確認プロンプトで待機しないようにする。
-if ! "$CMD_MKFS_EXT4" -q -L persistence -- "$CREATED_PART_PATH" < /dev/null; then
-    fail 22 "ext4ファイルシステムの作成に失敗しました: $CREATED_PART_PATH"
-fi
-check_signal
-
-stage 'mount'
-MNT_DIR="$("$CMD_MKTEMP" -d /run/mypocketos-persistence-setup-helper.XXXXXX 2>/dev/null)" \
-    || fail 23 '一時作業ディレクトリの作成に失敗しました。'
-check_signal
-
-if ! "$CMD_MOUNT" -- "$CREATED_PART_PATH" "$MNT_DIR"; then
-    fail 23 "一時マウントに失敗しました: $CREATED_PART_PATH -> $MNT_DIR"
-fi
-MOUNTED=1
-check_signal
-
-stage 'conf'
-CONF_PATH="$MNT_DIR/persistence.conf"
-if ! printf '/home\n' > "$CONF_PATH"; then
-    fail 24 "persistence.confの書き込みに失敗しました: $CONF_PATH"
-fi
-
-# 書き込んだ内容を機械的に検証する ("/home" + 改行1つ = 6バイトちょうど)。
-conf_size="$("$CMD_STAT" -c '%s' -- "$CONF_PATH" 2>/dev/null)" || conf_size=''
-if [ "$conf_size" != '6' ]; then
-    fail 24 "persistence.confの内容確認に失敗しました (サイズ: ${conf_size:-取得不可} バイト): $CONF_PATH"
-fi
-conf_content="$("$CMD_CAT" -- "$CONF_PATH" 2>/dev/null)" || conf_content=''
-if [ "$conf_content" != '/home' ]; then
-    fail 24 "persistence.confの内容確認に失敗しました (内容不一致): $CONF_PATH"
-fi
-check_signal
-
-stage 'sync'
-if ! "$CMD_SYNC"; then
-    fail 25 'syncに失敗しました。'
-fi
-check_signal
-
-stage 'umount'
-if ! "$CMD_UMOUNT" -- "$MNT_DIR"; then
-    fail 25 "アンマウントに失敗しました: $MNT_DIR"
-fi
-MOUNTED=0
-check_signal
+finalize_persistence_filesystem
 
 stage 'done'
 exit 0
