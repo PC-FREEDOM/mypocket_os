@@ -307,6 +307,40 @@
     </action>
   </keybind>
 
+  <!-- MyPocketOS: ウィンドウスナップ (Super+矢印)。Openbox標準action
+       (Unmaximize/MoveResizeTo/ToggleMaximize) のみを使用し、追加
+       スクリプト・daemonは導入しない。左右スナップは、既に最大化状態の
+       ウィンドウからでも確実に半分サイズへ移行できるよう、先に
+       Unmaximizeしてから MoveResizeTo する (最大化状態のままでは
+       MoveResizeToによる目的のサイズ変更が行われないため)。Super+Upも
+       同様にUnmaximize後にToggleMaximizeすることで、通常状態・最大化
+       状態のどちらから押しても最終結果を必ず最大化にする。 -->
+  <keybind key="W-Left">
+    <action name="Unmaximize"/>
+    <action name="MoveResizeTo">
+      <x>0</x>
+      <y>0</y>
+      <width>50%</width>
+      <height>100%</height>
+    </action>
+  </keybind>
+  <keybind key="W-Right">
+    <action name="Unmaximize"/>
+    <action name="MoveResizeTo">
+      <x>-0</x>
+      <y>0</y>
+      <width>50%</width>
+      <height>100%</height>
+    </action>
+  </keybind>
+  <keybind key="W-Up">
+    <action name="Unmaximize"/>
+    <action name="ToggleMaximize"/>
+  </keybind>
+  <keybind key="W-Down">
+    <action name="Unmaximize"/>
+  </keybind>
+
   <!-- Keybindings for running applications -->
   <!-- MyPocketOS: 標準rc.xmlのW-eはkfmclient (Konqueror) 向けの例だったが、
        Konquerorは本ディストリビューションに含まれないため、代わりに
