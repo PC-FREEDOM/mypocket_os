@@ -172,5 +172,128 @@ printf '%s\n' 'MockItem,mock-command' >"${MOCKDIR}/stdin_expected.txt"
 check "jgmenu_run apps output was piped into jgmenu's stdin unchanged" \
 	cmp -s "${STDIN_FILE}" "${MOCKDIR}/stdin_expected.txt"
 
+#==========================
+# ウィンドウスナップ (Super+矢印)。追加スクリプト・daemonは使わず、
+# Openbox標準action (Unmaximize/MoveResizeTo/ToggleMaximize) のみで
+# 実装されていることを、<keyboard>直下のkeybind構造から確認する。
+#==========================
+check "keyboard has exactly one W-Left keybind" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+matches = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Left']
+assert len(matches) == 1, f'expected exactly 1, found {len(matches)}'
+"
+
+check "keyboard has exactly one W-Right keybind" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+matches = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Right']
+assert len(matches) == 1, f'expected exactly 1, found {len(matches)}'
+"
+
+check "keyboard has exactly one W-Up keybind" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+matches = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Up']
+assert len(matches) == 1, f'expected exactly 1, found {len(matches)}'
+"
+
+check "keyboard has exactly one W-Down keybind" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+matches = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Down']
+assert len(matches) == 1, f'expected exactly 1, found {len(matches)}'
+"
+
+check "W-Left actions are, in order, Unmaximize then MoveResizeTo(x=0,y=0,width=50%,height=100%)" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+kbd = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Left'][0]
+actions = kbd.findall('ob:action', ns)
+assert [a.get('name') for a in actions] == ['Unmaximize', 'MoveResizeTo'], [a.get('name') for a in actions]
+mrt = actions[1]
+def val(tag):
+    e = mrt.find(f'ob:{tag}', ns)
+    assert e is not None, f'missing {tag}'
+    return e.text.strip()
+assert val('x') == '0', val('x')
+assert val('y') == '0', val('y')
+assert val('width') == '50%', val('width')
+assert val('height') == '100%', val('height')
+"
+
+check "W-Right actions are, in order, Unmaximize then MoveResizeTo(x=-0,y=0,width=50%,height=100%)" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+kbd = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Right'][0]
+actions = kbd.findall('ob:action', ns)
+assert [a.get('name') for a in actions] == ['Unmaximize', 'MoveResizeTo'], [a.get('name') for a in actions]
+mrt = actions[1]
+def val(tag):
+    e = mrt.find(f'ob:{tag}', ns)
+    assert e is not None, f'missing {tag}'
+    return e.text.strip()
+assert val('x') == '-0', val('x')
+assert val('y') == '0', val('y')
+assert val('width') == '50%', val('width')
+assert val('height') == '100%', val('height')
+"
+
+check "W-Up actions are, in order, Unmaximize then ToggleMaximize" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+kbd = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Up'][0]
+actions = kbd.findall('ob:action', ns)
+assert [a.get('name') for a in actions] == ['Unmaximize', 'ToggleMaximize'], [a.get('name') for a in actions]
+"
+
+check "W-Down actions are exactly Unmaximize (only, no other action)" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+kbd = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Down'][0]
+actions = kbd.findall('ob:action', ns)
+assert [a.get('name') for a in actions] == ['Unmaximize'], [a.get('name') for a in actions]
+"
+
+check "existing W-S-Left/Right/Up/Down DirectionalCycleWindows bindings are unchanged" \
+	python3 -c "
+import xml.etree.ElementTree as ET
+ns = {'ob': 'http://openbox.org/3.4/rc'}
+root = ET.parse('${RC_XML}').getroot()
+kb = root.find('.//ob:keyboard', ns)
+expected = {'W-S-Right': 'right', 'W-S-Left': 'left', 'W-S-Up': 'up', 'W-S-Down': 'down'}
+for key, direction in expected.items():
+    matches = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == key]
+    assert len(matches) == 1, f'{key}: expected exactly 1, found {len(matches)}'
+    actions = matches[0].findall('ob:action', ns)
+    assert [a.get('name') for a in actions] == ['DirectionalCycleWindows'], (key, [a.get('name') for a in actions])
+    d = actions[0].find('ob:direction', ns)
+    assert d is not None and d.text.strip() == direction, (key, d)
+"
+
 echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"
 [ "${FAIL}" -eq 0 ]
