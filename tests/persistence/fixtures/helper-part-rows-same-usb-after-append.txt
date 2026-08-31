@@ -1,0 +1,3 @@
+NAME="fakedisk1" PATH="__FAKE_DEVICE__1" TYPE="part" PKNAME="fakedisk" MAJ:MIN="259:1"
+NAME="fakedisk2" PATH="__FAKE_DEVICE__2" TYPE="part" PKNAME="fakedisk" MAJ:MIN="259:2"
+NAME="fakedisk3" PATH="__FAKE_DEVICE__3" TYPE="part" PKNAME="fakedisk" MAJ:MIN="259:3"

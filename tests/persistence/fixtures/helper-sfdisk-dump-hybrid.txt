@@ -1,0 +1,8 @@
+label: dos
+label-id: 0x61fae024
+device: __FAKE_DEVICE__
+unit: sectors
+sector-size: 512
+
+__FAKE_DEVICE__1 : start=64, size=3492416, type=0, bootable
+__FAKE_DEVICE__2 : start=540, size=6656, type=ef

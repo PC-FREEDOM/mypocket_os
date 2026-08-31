@@ -494,6 +494,164 @@ $home_chain"
     done
 }
 
+# ---- Mode B候補 (起動USBの末尾未使用領域) の構築、0または1件 ---------------
+# build_candidates (Mode A) とは独立した別関数とする。Mode Aは常に
+# Live起動元を候補から除外するのに対し、Mode Bは逆に「現在のMyPocketOS
+# 起動元USBそのもの」だけを対象とするため、両者を1つの判定ロジックに
+# 無理に統合しない。ここでの判定はあくまで一般ユーザー権限による予備的な
+# ものであり (README「GUI側の予備的な候補除外」節と同じ位置付け)、
+# 最終判断は必ずhelper (create-same-usb) が破壊的操作の直前に読み取り
+# 専用の手段で再検証する。
+#
+# 出力形式はbuild_candidatesと同じ7フィールド (PATH\001MAJMIN\001表示
+# パス\001表示サイズ\001表示モデル\001表示シリアル\001表示接続方式) と
+# する。ただし表示パスには実パスの代わりに固定文言「MyPocketOS 起動USB」
+# を、表示サイズには末尾未使用領域の見積り (「空き容量 約X.X GiB」) を
+# 入れることで、Mode Aの行 (実パス・ディスク全体のサイズ) と一覧上で
+# 明確に区別できるようにする (yadの列構成・フィールド位置は既存のMode A
+# 実装から一切変更しない)。
+#
+# 空き容量の見積りには sfdisk 等の特権に近いツールを使わず、一般ユーザー
+# でも読み取れる lsblk のみを使う。この見積りは表示専用であり、正確な
+# 計算・アライメント・最小サイズ判定はhelperが改めて行う (安全性の主境界
+# はhelper側にあり、ここでの計算はあくまで予備的なものである)。
+#
+# lsblkのSTART列とhelper (sfdisk --dump) のstart/size表記は、単位の性質が
+# 根本的に異なる。sfdiskのstart/sizeは対象diskの実際のlogical sector size
+# (sfdisk --dumpの"sector-size:"で明示される。512とは限らない) を単位と
+# するため、helper側 (compute_same_usb_target) はPT_SECTOR_SIZEを都度
+# 取得して換算する必要がある。一方lsblkのSTART列は、Linuxカーネルが
+# sysfs (ブロックデバイスのclass以下、パーティション名ディレクトリ直下の
+# startファイル) で公開する値をそのまま返しており、この値は対象diskの
+# 実際のlogical sector sizeに関係なく常に512バイトセクタ単位で表現
+# される (util-linux 2.41.5の `lsblk --list-columns` でも、SIZE等の
+# "use <number> if --bytes is given"という注記がSTARTには一切なく、
+# "partition start offset (in 512-byte sectors)"と無条件に明記されて
+# いる。実機でこのsysfsファイルを直接読んだ値と `lsblk -b -o START` の
+# 出力を突き合わせ、両者が常に一致する固定単位であることも確認済み)。
+# したがって、"START(セクタ) * 512 + SIZE(バイト、-b指定)"という下記の
+# 計算式は、対象USBの実際のlogical sector sizeが512か4096かによらず
+# 常に正しい (helperのようにPT_SECTOR_SIZE相当の値を別途取得・分岐する
+# 必要がない)。tests/persistence/test_gui_same_usb.shに、logical sector
+# size=4096相当のディスクを模したデータでこの前提を検証するテストがある。
+build_same_usb_candidate() {
+    live_source="$(findmnt -rn -o SOURCE --target /run/live/medium 2>/dev/null)" || return 0
+    [ -n "$live_source" ] || return 0
+    src="${live_source%%\[*}"
+    [ -n "$src" ] || return 0
+    [ -b "$src" ] || return 0
+
+    chain="$(lsblk -s -P -b -o KNAME,TYPE -- "$src" 2>/dev/null)" || return 0
+    [ -n "$chain" ] || return 0
+
+    disk_kname=''
+    disk_count=0
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        t_v="$(printf '%s\n' "$line" | extract_field TYPE)" || return 0
+        [ -n "$t_v" ] || return 0
+        if [ "$t_v" = 'disk' ]; then
+            k_v="$(printf '%s\n' "$line" | extract_field KNAME)" || return 0
+            [ -n "$k_v" ] || return 0
+            disk_kname="$k_v"
+            disk_count=$((disk_count + 1))
+        fi
+    done <<CHAIN_EOF
+$chain
+CHAIN_EOF
+    [ "$disk_count" -eq 1 ] || return 0
+    [ -n "$disk_kname" ] || return 0
+
+    disk_path="/dev/$disk_kname"
+    [ -b "$disk_path" ] || return 0
+
+    disk_row="$(lsblk -b -P -o NAME,KNAME,PATH,MAJ:MIN,TYPE,SIZE,RO,MODEL,SERIAL,TRAN -- "$disk_path" 2>/dev/null)" || return 0
+    [ -n "$disk_row" ] || return 0
+
+    path_v="$(printf '%s\n' "$disk_row" | extract_field PATH)" || return 0
+    majmin_v="$(printf '%s\n' "$disk_row" | extract_field 'MAJ:MIN')" || return 0
+    type_v="$(printf '%s\n' "$disk_row" | extract_field TYPE)" || return 0
+    size_v="$(printf '%s\n' "$disk_row" | extract_field SIZE)" || return 0
+    ro_v="$(printf '%s\n' "$disk_row" | extract_field RO)" || return 0
+    model_v="$(printf '%s\n' "$disk_row" | extract_field MODEL)" || return 0
+    serial_v="$(printf '%s\n' "$disk_row" | extract_field SERIAL)" || return 0
+    tran_v="$(printf '%s\n' "$disk_row" | extract_field TRAN)" || return 0
+
+    [ -n "$path_v" ] || return 0
+    [ "$path_v" = "$disk_path" ] || return 0
+    [ -n "$majmin_v" ] || return 0
+    [ "$type_v" = 'disk' ] || return 0
+    [ -n "$size_v" ] || return 0
+    [ "$ro_v" = '0' ] || return 0
+
+    # 物理デバイスであることの根拠 (Mode Aと同じ考え方)。
+    [ -e "/sys/block/$disk_kname/device" ] || return 0
+
+    # README「4.3 起動媒体の種類」: removable=1単独を根拠にせず、TRAN
+    # (接続方式) とsysfsの実デバイスパスの両方でUSB接続であることを
+    # 確認する (最終判断はhelper側で改めて行う)。
+    [ "$tran_v" = 'usb' ] || return 0
+    resolved="$(readlink -f -- "/sys/class/block/$disk_kname/device" 2>/dev/null)" || return 0
+    [ -n "$resolved" ] || return 0
+    case "$resolved" in
+        */usb[0-9]*/*) ;;
+        *) return 0 ;;
+    esac
+
+    # 既存partitionの終端の最大値を求める (システム全体からPKNAME一致で
+    # 絞り込む。Mode Aのholders/mount/swap判定と同じ考え方で、子
+    # partitionの情報が1件でも解析できなければ、末尾未使用領域を安全に
+    # 見積れないため候補自体を出さない)。
+    child_rows="$(lsblk -b -P -o NAME,TYPE,START,SIZE,PKNAME 2>/dev/null)" || return 0
+    [ -n "$child_rows" ] || return 0
+
+    max_end_bytes=0
+    found_child=0
+    while IFS= read -r cline; do
+        [ -n "$cline" ] || continue
+        cpk="$(printf '%s\n' "$cline" | extract_field PKNAME)" || return 0
+        [ "$cpk" = "$disk_kname" ] || continue
+        ctype="$(printf '%s\n' "$cline" | extract_field TYPE)" || return 0
+        [ "$ctype" = 'part' ] || continue
+        cstart="$(printf '%s\n' "$cline" | extract_field START)" || return 0
+        csize="$(printf '%s\n' "$cline" | extract_field SIZE)" || return 0
+        case "$cstart" in '' | *[!0-9]*) return 0 ;; esac
+        case "$csize" in '' | *[!0-9]*) return 0 ;; esac
+        # STARTは512バイトセクタ単位固定 (-bの影響を受けない)。SIZEは
+        # -b指定によりバイト単位。
+        cend=$(( (cstart * 512) + csize ))
+        if [ "$cend" -gt "$max_end_bytes" ]; then
+            max_end_bytes="$cend"
+        fi
+        found_child=1
+    done <<CHILD_EOF
+$child_rows
+CHILD_EOF
+    [ "$found_child" -eq 1 ] || return 0
+
+    case "$size_v" in '' | *[!0-9]*) return 0 ;; esac
+    if [ "$max_end_bytes" -ge "$size_v" ]; then
+        return 0
+    fi
+    free_estimate_bytes=$((size_v - max_end_bytes))
+
+    # helperの最小サイズ要件 (1GiB) を、表示専用の予備判定としてここでも
+    # 適用する (正確な判定・アライメントはhelperが改めて行う)。
+    if [ "$free_estimate_bytes" -lt 1073741824 ]; then
+        return 0
+    fi
+
+    display_path='MyPocketOS 起動USB'
+    display_size="空き容量 約$(format_size "$free_estimate_bytes") (USB全体 $(format_size "$size_v"))"
+    display_model="$(display_or_unknown "$model_v")"
+    display_serial="$(display_or_unknown "$serial_v")"
+    display_tran="$(display_or_unknown "$tran_v")"
+
+    printf '%s\001%s\001%s\001%s\001%s\001%s\001%s\n' \
+        "$path_v" "$majmin_v" "$display_path" "$display_size" \
+        "$display_model" "$display_serial" "$display_tran"
+}
+
 # ---- 確認済みXDG_RUNTIME_DIR内に一時作業ディレクトリを作成 -----------------
 prepare_work_dir() {
     WORK_DIR="$XDG_RUNTIME_DIR/mypocketos-persistence-setup.work.$$"
@@ -559,6 +717,39 @@ result_message_for() {
         71)
             printf '未分類の内部エラーが発生しました。'
             ;;
+        30)
+            printf '起動元デバイスがUSB接続として確認できなかったため中止しました。'
+            ;;
+        31)
+            printf '対象ディスクがMyPocketOSの起動元USBと一致しないため中止しました。'
+            ;;
+        32)
+            printf '既存のパーティションテーブルを解析できなかったため中止しました (対応していない形式である可能性があります)。'
+            ;;
+        33)
+            printf 'パーティションの追加枠 (最大4件) が既に使用されているため中止しました。'
+            ;;
+        34)
+            printf 'USBの末尾の空き領域が最小サイズ (1GiB) 未満だったため中止しました。'
+            ;;
+        35)
+            printf '空き領域の計算結果が対象ディスクの状態と一致しなかったため中止しました。'
+            ;;
+        36)
+            printf '既存のパーティションテーブルへの追加操作に失敗しました。\n対象ディスクが途中状態になっている可能性があります。'
+            ;;
+        37)
+            printf '追加操作後、既存のパーティション (MyPocketOS起動領域等) に意図しない変化を検出したため処理を停止しました。\n対象ディスクの状態を確認してください。'
+            ;;
+        38)
+            printf '追加したパーティションの検証に失敗したため、フォーマットせずに中止しました。\n対象ディスクが途中状態になっている可能性があります。'
+            ;;
+        39)
+            printf 'USBディスクの総サイズを取得できませんでした (空き容量不足とは別の原因です)。デバイスの状態を確認してください。'
+            ;;
+        40)
+            printf 'パーティションテーブルの書き込みは完了しましたが、新しい領域を現在のシステムへ認識させられませんでした。\n再起動すると認識される可能性があります。再起動後、Persistence領域の状態を確認してください。'
+            ;;
         129 | 130 | 143)
             printf '処理が中断されました。'
             ;;
@@ -584,6 +775,7 @@ result_message_for() {
 run_helper() {
     device="$1"
     majmin="$2"
+    op="$3"
 
     # helper起動直前の保留シグナルを反映する。ここではまだ進捗ダイアログも
     # helperも何も開始していないため、通常のEXIT trap (cleanup) だけで
@@ -610,7 +802,7 @@ run_helper() {
     # 終了させる。
     check_signal
 
-    sudo -n -- "$HELPER" create "$device" "$majmin" \
+    sudo -n -- "$HELPER" "$op" "$device" "$majmin" \
         >"$stdout_file" 2>"$stderr_file" &
     helper_pid=$!
 
@@ -666,18 +858,66 @@ check_runtime_dir
 acquire_gui_lock
 check_signal
 
-CANDIDATES="$(build_candidates)"
+# Mode A (完全に未使用の別ディスク全体) とMode B (起動元USBの末尾未使用
+# 領域) の候補を、それぞれ独立した関数で構築したうえで統合する。
+# build_candidates (Mode A) 自体は一切変更しない。統合後のCANDIDATESは、
+# 既存の7フィールド (PATH\001MAJMIN\001表示パス\001表示サイズ\001表示
+# モデル\001表示シリアル\001表示接続方式) の末尾へmode種別 (A/B) を
+# 追加した8フィールド形式とする。yad表示に使うフィールド3〜7の位置・
+# 意味はMode A実装から一切変更していない (末尾に追加した8番目の
+# フィールドを新たに参照するのはmode種別の判定処理のみ)。
+tag_candidates_with_mode() {
+    mode="$1"
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf '%s\001%s\n' "$line" "$mode"
+    done
+}
+
+CANDIDATES_A="$(build_candidates)"
+CANDIDATES_B="$(build_same_usb_candidate)"
+
+TAGGED_A=''
+if [ -n "$CANDIDATES_A" ]; then
+    TAGGED_A="$(printf '%s\n' "$CANDIDATES_A" | tag_candidates_with_mode A)"
+fi
+TAGGED_B=''
+if [ -n "$CANDIDATES_B" ]; then
+    TAGGED_B="$(printf '%s\n' "$CANDIDATES_B" | tag_candidates_with_mode B)"
+fi
+
+CANDIDATES=''
+if [ -n "$TAGGED_A" ] && [ -n "$TAGGED_B" ]; then
+    CANDIDATES="$TAGGED_A
+$TAGGED_B"
+elif [ -n "$TAGGED_A" ]; then
+    CANDIDATES="$TAGGED_A"
+elif [ -n "$TAGGED_B" ]; then
+    CANDIDATES="$TAGGED_B"
+fi
 
 if [ -z "$CANDIDATES" ]; then
     notice '対象デバイスが見つかりません。' || :
     exit 0
 fi
 
-# yadの--listへ渡す平坦化データ (表示列: パス・サイズ・モデル・
-# シリアル番号・接続方式) を、CANDIDATESの各レコード (\001区切り、
-# 1レコード=1行) からフィールド3〜7を取り出して組み立てる。
+# yadの--listへ渡す平坦化データ。表示列 (パス・サイズ・モデル・シリアル
+# 番号・接続方式、CANDIDATESのフィールド3〜7) に加えて、内部識別専用の
+# 非表示列 (実DEVICE・実MAJMIN・mode種別、フィールド1・2・8) をyadの
+# HD (hidden) 列種別で追加する。HD列は一覧には表示されないが、選択結果
+# には含まれる (yad(1) "List options" 参照、実際にDebian 13 trixieの
+# yad 0.40.0で動作確認済み)。
+#
+# 表示用文字列と内部識別値を同じ列で兼用しない設計とする理由: Mode Bの
+# 「パス」列には実デバイスパスの代わりに固定文言「MyPocketOS 起動USB」
+# を表示するが (build_same_usb_candidate参照)、この表示列をそのまま
+# 選択後のlookupキーとして使うと、表示文字列と実デバイスパスが一致
+# しないため必ず失敗する (実機検証で発覚した不具合。テスト側が
+# MOCK_LIST_SELECTIONへ誤って実デバイスパスを直接与えていたため
+# 検出できていなかった)。HD列により、表示列が何であっても内部識別値は
+# 常に正しく往復する。
 yad_data="$(printf '%s\n' "$CANDIDATES" | awk -F'\001' '{
-    print $3; print $4; print $5; print $6; print $7
+    print $3; print $4; print $5; print $6; print $7; print $1; print $2; print $8
 }')"
 
 # set -eu 下では、この代入文自体がパイプライン (yad) の非0終了で
@@ -688,52 +928,87 @@ selected_rc=0
 selected="$(printf '%s' "$yad_data" | yad --list --separator='\001' \
     --title="MyPocketOS" --center --on-top --skip-taskbar \
     --width=640 --height=320 \
-    --text="永続領域を作成するデバイスを選択してください。\nこの一覧に表示されたこと自体は安全性の保証ではありません。実際の安全確認は確認後にヘルパーが行います。" \
+    --text="永続領域を作成するデバイスを選択してください。\n「MyPocketOS 起動USB」は現在起動中のUSB自身の空き領域のみを使い、起動領域は変更しません。それ以外は選択したディスク全体を初期化します。\nこの一覧に表示されたこと自体は安全性の保証ではありません。実際の安全確認は確認後にヘルパーが行います。" \
     --column="パス" --column="サイズ" --column="モデル" --column="シリアル番号" --column="接続方式" \
+    --column="実DEVICE:HD" --column="実MAJMIN:HD" --column="mode種別:HD" \
     --button="キャンセル:1" --button="次へ:0")" || selected_rc=$?
 
 if [ "$selected_rc" -ne 0 ]; then
     exit 0
 fi
 
-selected_path="$(printf '%s' "$selected" | awk -F'\001' '{print $1}')"
+# 表示列 (パス等) ではなく、yadのHD (非表示) 列として返ってくる内部値を
+# 選択結果から直接取り出す。CANDIDATESへ改めてlookupする必要はない
+# (表示文字列を検索キーにしないため、表示内容が何であっても常に正しい
+# DEVICE/MAJOR:MINOR/mode種別が得られる)。
+selected_path="$(printf '%s' "$selected" | awk -F'\001' '{print $6}')"
+device_majmin="$(printf '%s' "$selected" | awk -F'\001' '{print $7}')"
+selected_mode="$(printf '%s' "$selected" | awk -F'\001' '{print $8}')"
 
 if [ -z "$selected_path" ]; then
     notice '選択内容を取得できませんでした。' || :
     exit 1
 fi
 
-# 選択されたパスに対応するMAJOR:MINORを、候補一覧生成時に取得した値
-# (CANDIDATESのフィールド1=PATH, フィールド2=MAJ:MIN) から引く
-# (yadの表示列には含めていない内部値)。
-device_majmin="$(printf '%s\n' "$CANDIDATES" | awk -F'\001' -v want="$selected_path" '
-    $1 == want { print $2; exit }
-')"
-
 if [ -z "$device_majmin" ]; then
     notice '対象デバイスのMAJOR:MINORを取得できませんでした。' || :
     exit 1
 fi
 
-# ---- 警告 + type-to-confirm (取り消し可能なのはここまで) -------------------
-confirm_word="ERASE $selected_path"
-warning_text="$(printf '警告: この操作でデバイスの全内容が失われます。\n対象: %s\nこの操作は取り消せません。\n続行するには、下の欄に次の文字列を正確に入力してください:\n%s' \
-    "$selected_path" "$confirm_word")"
-
-# 同様に、set -eu 下でのキャンセル (yadの非0終了) による即時終了を避ける。
-entry_rc=0
-entry_result="$(yad --entry --title="MyPocketOS" --center --on-top --skip-taskbar \
-    --width=480 --text="$warning_text" \
-    --button="キャンセル:1" --button="OK:0")" || entry_rc=$?
-
-if [ "$entry_rc" -ne 0 ]; then
-    exit 0
+if [ "$selected_mode" != 'A' ] && [ "$selected_mode" != 'B' ]; then
+    notice '選択内容の種別を判定できませんでした。' || :
+    exit 1
 fi
 
-if [ "$entry_result" != "$confirm_word" ]; then
-    notice '確認文字列が一致しなかったため中止しました。' || :
-    exit 0
-fi
+if [ "$selected_mode" = 'B' ]; then
+    # ---- Mode B: 確認ダイアログ (ERASE type-to-confirmは使わない) --------
+    # ディスク全体を消去する操作ではないため、Mode Aの「ERASE <device>」
+    # type-to-confirmを流用しない。代わりに、対象USB・使用する空き容量・
+    # MyPocketOS起動領域は変更しないこと・/homeの保存領域を作ることを
+    # 明示した確認ダイアログとする。
+    #
+    # 表示中の「サイズ」列 (yadが返す$selected の2フィールド目) には、
+    # build_same_usb_candidateが生成した「空き容量 約X.X GiB (USB全体
+    # 約Y.Y GiB)」の文字列がそのまま入っている。これを流用することで、
+    # 一覧表示と確認ダイアログの数値表記を必ず一致させる。
+    free_space_text="$(printf '%s' "$selected" | awk -F'\001' '{print $2}')"
 
-# ---- ここから先はキャンセルしない (README.md「GUI操作フロー」5.) ----------
-run_helper "$selected_path" "$device_majmin"
+    confirm_text="$(printf '永続領域を作成します。\n対象: %s\n使用する空き容量: %s\n\nMyPocketOSの起動領域 (ISOイメージ・EFI領域) は変更しません。\n/home のファイルと設定を保存するための領域を、USBの空き部分に新しく作成します。\n\nこの操作を実行しますか？' \
+        "$selected_path" "${free_space_text:-不明}")"
+
+    confirm_rc=0
+    yad --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+        --width=480 --text="$confirm_text" \
+        --button="キャンセル:1" --button="OK:0" >/dev/null 2>&1 || confirm_rc=$?
+
+    if [ "$confirm_rc" -ne 0 ]; then
+        exit 0
+    fi
+
+    # ---- ここから先はキャンセルしない (README.md「GUI操作フロー」5.) ----
+    run_helper "$selected_path" "$device_majmin" create-same-usb
+else
+    # ---- Mode A: 警告 + type-to-confirm (取り消し可能なのはここまで、 --
+    # ---- 既存実装から変更なし) --------------------------------------------
+    confirm_word="ERASE $selected_path"
+    warning_text="$(printf '警告: この操作でデバイスの全内容が失われます。\n対象: %s\nこの操作は取り消せません。\n続行するには、下の欄に次の文字列を正確に入力してください:\n%s' \
+        "$selected_path" "$confirm_word")"
+
+    # 同様に、set -eu 下でのキャンセル (yadの非0終了) による即時終了を避ける。
+    entry_rc=0
+    entry_result="$(yad --entry --title="MyPocketOS" --center --on-top --skip-taskbar \
+        --width=480 --text="$warning_text" \
+        --button="キャンセル:1" --button="OK:0")" || entry_rc=$?
+
+    if [ "$entry_rc" -ne 0 ]; then
+        exit 0
+    fi
+
+    if [ "$entry_result" != "$confirm_word" ]; then
+        notice '確認文字列が一致しなかったため中止しました。' || :
+        exit 0
+    fi
+
+    # ---- ここから先はキャンセルしない (README.md「GUI操作フロー」5.) ----
+    run_helper "$selected_path" "$device_majmin" create
+fi

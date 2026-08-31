@@ -137,13 +137,15 @@ if [ -e "$list_stdin" ]; then
     # 挙動である)。"wc -l" は改行文字の個数を数えるため、この最終行を
     # 1件少なく数えてしまう。"awk 'END{print NR}'" は末尾に改行のない
     # 最終行も1行として数えるため、こちらを使う。
+    # 1候補あたり8行 (表示列5 + 非表示HD列3: 実DEVICE・実MAJMIN・
+    # mode種別)。この候補セットには1件のみ含まれるはずなので8行となる。
     line_count="$(awk 'END { print NR }' "$list_stdin")"
     has_fakedisk=0
     grep -qxF '/dev/fakedisk' "$list_stdin" && has_fakedisk=1
     has_excluded=0
     grep -qxF '/dev/sda' "$list_stdin" && has_excluded=1
     grep -qxF '/dev/sda1' "$list_stdin" && has_excluded=1
-    if [ "$line_count" -eq 5 ] && [ "$has_fakedisk" -eq 1 ] && [ "$has_excluded" -eq 0 ]; then
+    if [ "$line_count" -eq 8 ] && [ "$has_fakedisk" -eq 1 ] && [ "$has_excluded" -eq 0 ]; then
         log_bool 'gui_candidate_clean_disk_only_exact_candidate_list' 1
     else
         log_bool 'gui_candidate_clean_disk_only_exact_candidate_list' 0
@@ -253,8 +255,11 @@ else
 fi
 
 # ---------- 12: 確認不一致でsudo未到達 ----------
+# yadの選択結果 (表示列5件+非表示HD列3件) の詳細はシナリオ13のコメントを
+# 参照。
 run_gui gui_confirm_mismatch_no_sudo 0 gui-rows-clean-disk.txt \
-    MOCK_LIST_SELECTION='/dev/fakedisk' MOCK_ENTRY_TEXT='ERASE /dev/wrong'
+    MOCK_LIST_SELECTION='/dev/fakedisk'"$(printf '\001')"'16.0 GiB'"$(printf '\001')"'Fake Disk'"$(printf '\001')"'FAKE123'"$(printf '\001')"'usb'"$(printf '\001')"'/dev/fakedisk'"$(printf '\001')"'259:0'"$(printf '\001')"'A' \
+    MOCK_ENTRY_TEXT='ERASE /dev/wrong'
 if sudo_called; then
     log_bool 'gui_confirm_mismatch_no_sudo_check' 0
 else
@@ -267,8 +272,15 @@ else
 fi
 
 # ---------- 13: 正しい確認文字列でsudoが正確に1回 ----------
+# yadの選択結果は、表示列 (パス・サイズ・モデル・シリアル番号・接続方式)
+# に続けて、内部識別専用の非表示 (HD) 列 (実DEVICE・実MAJMIN・mode種別)
+# を含む8フィールドの\001区切り文字列として返る (実機で発覚した不具合の
+# 修正により、表示列と内部識別値が別々になった。gui-rows-clean-disk.txt
+# のfakedisk行: SIZE=17179869184 バイト = 16.0 GiB, MODEL="Fake Disk",
+# SERIAL="FAKE123", TRAN="usb", MAJ:MIN="259:0")。
 run_gui gui_confirm_correct_sudo_called_once 0 gui-rows-clean-disk.txt \
-    MOCK_LIST_SELECTION='/dev/fakedisk' MOCK_ENTRY_TEXT='ERASE /dev/fakedisk' MOCK_HELPER_RC=0
+    MOCK_LIST_SELECTION='/dev/fakedisk'"$(printf '\001')"'16.0 GiB'"$(printf '\001')"'Fake Disk'"$(printf '\001')"'FAKE123'"$(printf '\001')"'usb'"$(printf '\001')"'/dev/fakedisk'"$(printf '\001')"'259:0'"$(printf '\001')"'A' \
+    MOCK_ENTRY_TEXT='ERASE /dev/fakedisk' MOCK_HELPER_RC=0
 count="$(sudo_invocation_count)"
 if sudo_called && [ "$count" -eq 1 ]; then
     log_bool 'gui_confirm_correct_sudo_called_once_check' 1

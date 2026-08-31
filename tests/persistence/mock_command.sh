@@ -6,13 +6,18 @@
 #
 # 3分類:
 #   1) 読み取り専用パススルー: 実バイナリを無条件でexecする。
-#      awk grep sed cut tail sleep
+#      awk grep sed cut tail sleep readlink
 #   2) sandbox制限ラッパー: 対象パスがsandbox配下であることを確認した
 #      うえで実バイナリへ委譲する。sandbox外を指す場合は exit 99。
 #      mkdir rmdir rm cat mktemp ls
 #   3) 完全モック: 実バイナリを一切execしない。
 #      lsblk findmnt id stat parted mkfs.ext4 mount umount partprobe
-#      udevadm wipefs sudo yad sync
+#      udevadm wipefs sudo yad sync sfdisk blockdev (create-same-usb用)
+#
+# sfdiskは、テスト側が事前に用意する状態ファイル
+# (MOCK_SFDISK_DUMP_STATE_FILE、実sfdisk --dump形式のテキスト) を介した
+# statefulモックである。--dumpは状態ファイルをそのまま返し、--appendは
+# 標準入力から読んだ新規partition仕様を状態ファイルへ1行追記する。
 #
 # ls は本来ただの読み取り専用パススルーだが、失敗マトリクス
 # (test_helper_failure_matrix.sh) がcheck_holders_emptyの
@@ -33,7 +38,7 @@ set -eu
 
 # passthrough_allowlist: このリストに無いコマンド名は write_mocks が
 # 自動でpassthrough化しない (項目9)。
-PASSTHROUGH_ALLOWLIST='awk grep sed cut tail sleep'
+PASSTHROUGH_ALLOWLIST='awk grep sed cut tail sleep readlink'
 
 write_mocks() {
     # write_mocks SANDBOX
@@ -154,6 +159,45 @@ done
 exec /usr/bin/rmdir "\$@"
 EOF
     chmod +x "$bin/rmdir"
+
+    # rm: create-same-usb (Mode B) のsfdiskバックアップ用一時ディレクトリの
+    # 後始末 (on_exitでの rm -rf) にのみ使う。rmdirと同じsandbox制限
+    # ラッパーとし、対象がバックアップ用ディレクトリの場合に限り、
+    # MOCK_FAIL_RM_SFDISK_BACKUPによる失敗注入を許可する。
+    cat > "$bin/rm" <<EOF
+#!/bin/sh
+SANDBOX='$sandbox'
+past_dd=0
+for a in "\$@"; do
+    if [ "\$past_dd" -eq 1 ]; then
+        case "\$a" in
+            "\$SANDBOX"/*) ;;
+            *) echo "mock rm: REFUSING path outside sandbox: \$a" >&2; exit 99 ;;
+        esac
+        case "\$a" in
+            */mypocketos-persistence-setup-helper.sfdisk-backup.*)
+                if [ "\${MOCK_FAIL_RM_SFDISK_BACKUP:-0}" = '1' ]; then
+                    echo "mock rm: injected failure (sfdisk backup dir): \$a" >&2
+                    exit 1
+                fi
+                ;;
+        esac
+    fi
+    case "\$a" in
+        --) past_dd=1 ;;
+        --*) ;;
+        -*) ;;
+        *)
+            case "\$a" in
+                "\$SANDBOX"/*) ;;
+                *) echo "mock rm: REFUSING path outside sandbox: \$a" >&2; exit 99 ;;
+            esac
+            ;;
+    esac
+done
+exec /usr/bin/rm "\$@"
+EOF
+    chmod +x "$bin/rm"
 
     # /proc/cmdline・/proc/swapsへの特殊応答は、ファイル引数が正確に1件
     # (他の引数・オプションを伴わない) の場合だけ許可する。余分な引数・
@@ -464,6 +508,18 @@ if [ "\$inverse" -eq 1 ] && [ "\$colspec" = 'KNAME' ]; then
     exit 0
 fi
 
+# build_same_usb_candidate (GUI Mode B候補) が、起動元祖先チェーンの
+# うちTYPE=diskのものを特定するために使う。build_candidates (Mode A) の
+# 除外判定用チェーン (-o KNAMEのみ) とは別のcolspecであり、別の
+# env変数群 (MOCK_SAME_USB_*) で駆動する。
+if [ "\$inverse" -eq 1 ] && [ "\$colspec" = 'KNAME,TYPE' ]; then
+    if [ "\${MOCK_FAIL_SAME_USB_ANCESTOR_CHAIN:-0}" = '1' ]; then
+        exit 1
+    fi
+    printf '%s\n' "\${MOCK_SAME_USB_ANCESTOR_CHAIN_ROWS:-KNAME=\"unrelated-disk\" TYPE=\"disk\"}"
+    exit 0
+fi
+
 case "\$colspec" in
     'NAME,KNAME,PATH,MAJ:MIN,TYPE,SIZE,RO,RM,HOTPLUG,MOUNTPOINTS,FSTYPE,PTTYPE,LABEL,PARTLABEL,PKNAME,MODEL,SERIAL,TRAN')
         cat "\${MOCK_ALL_ROWS_FILE:?MOCK_ALL_ROWS_FILE not set}"
@@ -475,6 +531,18 @@ case "\$colspec" in
         ;;
     'NAME,PATH,TYPE,PKNAME,MAJ:MIN')
         cat "\${MOCK_PART_ROWS_FILE:?MOCK_PART_ROWS_FILE not set}"
+        exit 0
+        ;;
+    'NAME,KNAME,PATH,MAJ:MIN,TYPE,SIZE,RO,MODEL,SERIAL,TRAN')
+        # build_same_usb_candidate (GUI Mode B) の起動元USB自身の情報取得。
+        printf '%s\n' "\${MOCK_SAME_USB_DISK_ROW:-}"
+        exit 0
+        ;;
+    'NAME,TYPE,START,SIZE,PKNAME')
+        # build_same_usb_candidate (GUI Mode B) の子partition (末尾未使用
+        # 領域の見積り用) 取得。システム全体を対象とするためdevice引数は
+        # 渡されない。
+        printf '%s\n' "\${MOCK_SAME_USB_CHILD_ROWS:-}"
         exit 0
         ;;
     LABEL)
@@ -538,6 +606,10 @@ case "\$colspec" in
         printf '%s\n' "\${MOCK_LSBLK_PKNAME:-fakedisk}"
         exit 0
         ;;
+    TRAN)
+        printf '%s\n' "\${MOCK_LSBLK_TRAN:-usb}"
+        exit 0
+        ;;
 esac
 
 echo "mock lsblk: unrecognized invocation: \$*" >&2
@@ -594,6 +666,188 @@ fi
 exit 0
 EOF
     chmod +x "$bin/wipefs"
+
+    # ---- create-same-usb (Mode B) 専用モック: sfdisk / blockdev -----------
+    # sfdiskは状態ファイル (MOCK_SFDISK_DUMP_STATE_FILE、テスト側が事前に
+    # 実sfdisk --dump形式のテキストで初期化する) を介したstatefulモックと
+    # する。--dump は状態ファイルの内容をそのまま返し、--append は標準
+    # 入力から読んだ新規partition仕様 (start=/size=/type=) を1行追記する
+    # (実sfdiskのpartition番号割当を模倣せず、常に固定devpathを追記する。
+    # identify_new_partition_since_baselineはPATH集合の差分で新規
+    # partitionを特定するため、番号の連続性は不要)。
+    cat > "$bin/sfdisk" <<EOF
+#!/bin/sh
+SANDBOX='$sandbox'
+: > "\$SANDBOX/work/sfdisk-called" 2>/dev/null || :
+printf '%s\n' "\$*" >> "\$SANDBOX/work/sfdisk-invocations"
+
+case "\$*" in
+    *--help*)
+        printf ' -d, --dump <dev>                  dump partition table (usable for later input)\n'
+        printf ' -J, --json <dev>                  dump partition table in JSON format\n'
+        if [ "\${MOCK_SFDISK_HELP_MISSING_APPEND:-0}" != '1' ]; then
+            printf ' -a, --append              append partitions to existing partition table\n'
+        fi
+        if [ "\${MOCK_SFDISK_HELP_MISSING_LOCK:-0}" != '1' ]; then
+            printf '     --lock[=<mode>]       use exclusive device lock (yes, no or nonblock)\n'
+        fi
+        if [ "\${MOCK_SFDISK_HELP_MISSING_BACKUP:-0}" != '1' ]; then
+            printf ' -b, --backup              backup partition table sectors (see -O)\n'
+        fi
+        if [ "\${MOCK_SFDISK_HELP_MISSING_NOREREAD:-0}" != '1' ]; then
+            printf '     --no-reread           do not check whether the device is in use\n'
+        fi
+        if [ "\${MOCK_SFDISK_HELP_MISSING_NOTELLKERNEL:-0}" != '1' ]; then
+            printf '     --no-tell-kernel      do not tell kernel about changes\n'
+        fi
+        exit 0
+        ;;
+esac
+
+state_file="\${MOCK_SFDISK_DUMP_STATE_FILE:?MOCK_SFDISK_DUMP_STATE_FILE not set}"
+
+case "\$*" in
+    *--dump*)
+        # 回帰テスト用: sfdisk --append失敗後、helper側の診断
+        # (diagnose_disk_state_after_sfdisk_failure) が行う読み取り専用の
+        # sfdisk --dump再実行だけを狙って失敗させる (診断結果が
+        # "unknown" になることを確認するため)。--append呼び出しが
+        # sfdisk-invocationsに既に記録されている場合のみ発動するため、
+        # --append失敗より前段階のsfdisk --dump呼び出し (compute_
+        # same_usb_target/reverify_same_usb_target) には影響しない。
+        if [ "\${MOCK_SFDISK_DUMP_FAIL_AFTER_APPEND_ATTEMPT:-0}" = '1' ] \
+            && grep -qF -- '--append' "\$SANDBOX/work/sfdisk-invocations" 2>/dev/null; then
+            exit 1
+        fi
+        [ "\${MOCK_SFDISK_DUMP_EXIT:-0}" = '0' ] || exit "\${MOCK_SFDISK_DUMP_EXIT}"
+        if [ "\${MOCK_SFDISK_DUMP_EMPTY:-0}" = '1' ]; then
+            exit 0
+        fi
+        cat -- "\$state_file"
+        exit 0
+        ;;
+    *--append*)
+        spec="\$(cat)"
+        if [ -n "\${MOCK_SFDISK_APPEND_SLEEP_SECONDS:-}" ]; then
+            sleep "\${MOCK_SFDISK_APPEND_SLEEP_SECONDS}"
+        fi
+        if [ "\${MOCK_SFDISK_APPEND_EXIT:-0}" != '0' ] && [ "\${MOCK_SFDISK_APPEND_WRITE_THEN_FAIL:-0}" != '1' ]; then
+            # 実機でのsfdisk --append失敗時のstderr捕捉・表示 (helper側の
+            # 診断計装) を回帰テストできるよう、任意のstderr文言を模擬
+            # できるようにする。未指定なら何も出力しない (実機の実際の
+            # メッセージが判明するまでの暫定値であるため)。
+            if [ -n "\${MOCK_SFDISK_APPEND_STDERR:-}" ]; then
+                printf '%s\n' "\${MOCK_SFDISK_APPEND_STDERR}" >&2
+            fi
+            exit "\${MOCK_SFDISK_APPEND_EXIT}"
+        fi
+        new_start="\$(printf '%s' "\$spec" | sed -n 's/.*start=\([0-9]*\).*/\1/p')"
+        new_size="\$(printf '%s' "\$spec" | sed -n 's/.*size=\([0-9]*\).*/\1/p')"
+        new_type="\$(printf '%s' "\$spec" | sed -n 's/.*type=\([0-9A-Za-z]*\).*/\1/p')"
+        # 回帰テスト用: 実sfdiskが要求どおりに書き込まなかった (あるいは
+        # 予期せぬジオメトリになった) 場合を模擬する。指定があれば、
+        # 要求された値ではなくこちらの値を実際の書込み内容として使う。
+        # verify_new_partition_geometry (終了コード38) がこれを検出できる
+        # ことを確認するために使う。
+        new_start="\${MOCK_SFDISK_APPEND_OVERRIDE_START:-\$new_start}"
+        new_size="\${MOCK_SFDISK_APPEND_OVERRIDE_SIZE:-\$new_size}"
+        new_type="\${MOCK_SFDISK_APPEND_OVERRIDE_TYPE:-\$new_type}"
+        new_devpath="\${MOCK_SFDISK_APPEND_NEW_DEVPATH:-\$SANDBOX/dev/fakedisk3}"
+        if [ "\${MOCK_SFDISK_APPEND_CORRUPT_EXISTING:-0}" = '1' ]; then
+            # 回帰テスト用: ヘッダ (最初の空行) の直後にある既存partition
+            # 行 (1件目) を意図的に書き換える。
+            # verify_existing_entries_unchanged (終了コード37) がこれを
+            # 検出できることを確認するために使う。mvはこのモックのPATH
+            # (sandbox binのみ) に存在しないため、シェル組み込みの
+            # コマンド置換+リダイレクトだけで上書きする。
+            corrupted="\$(awk 'BEGIN{seen_blank=0; done=0} /^\$/{seen_blank=1; print; next} seen_blank && !done {sub(/size=[0-9]+/, "size=999999999"); done=1} {print}' "\$state_file")"
+            printf '%s\n' "\$corrupted" > "\$state_file"
+        fi
+        printf '%s : start=%s, size=%s, type=%s\n' "\$new_devpath" "\$new_start" "\$new_size" "\$new_type" >> "\$state_file"
+        # 回帰テスト用: 「diskへの書込みは実際に発生したにもかかわらず、
+        # sfdisk自体はnonzeroで終了する」という状態を模擬する
+        # (sfdiskがnonzeroで終了した場合でも「diskは変更されていない」
+        # とは断定しない、というhelper側の診断方針の回帰確認用。診断結果
+        # が "changed" になることを確認するために使う)。
+        if [ "\${MOCK_SFDISK_APPEND_WRITE_THEN_FAIL:-0}" = '1' ] && [ "\${MOCK_SFDISK_APPEND_EXIT:-0}" != '0' ]; then
+            if [ -n "\${MOCK_SFDISK_APPEND_STDERR:-}" ]; then
+                printf '%s\n' "\${MOCK_SFDISK_APPEND_STDERR}" >&2
+            fi
+            exit "\${MOCK_SFDISK_APPEND_EXIT}"
+        fi
+        exit 0
+        ;;
+esac
+
+echo "mock sfdisk: unrecognized invocation: \$*" >&2
+exit 1
+EOF
+    chmod +x "$bin/sfdisk"
+
+    # 実blockdevの引数仕様 ("blockdev [-v|-q] commands devices") は、
+    # sfdiskと異なりgetopt_longではない独自パーサのため "--" を
+    # end-of-optionsとして扱わない。実機で
+    # `blockdev --getsz -- DEVICE` -> "blockdev: Unknown command: --" (rc=1)
+    # `blockdev --getsz DEVICE`    -> 正常 (rc=0)
+    # であることを実機で確認済み。production側もこれに合わせ "--" を
+    # 付けずに呼び出す (--getsz DEVICE、正確に2引数)。件数・順序の
+    # いずれかが想定と異なる場合は、想定外の呼び出しとして明示的に
+    # 拒否する (実引数仕様との乖離をテストが検出できるようにするため)。
+    # production側は当初 --getsize64 (BLKGETSIZE64 ioctl) を使っていたが、
+    # 実機で --getsize64のみ失敗する個体が見つかったため、より古く広く
+    # サポートされている --getsz (BLKGETSIZE ioctl) へ切り替えた。
+    cat > "$bin/blockdev" <<'EOF'
+#!/bin/sh
+if [ "$#" -ne 2 ] || [ "$1" != '--getsz' ]; then
+    echo "mock blockdev: unrecognized invocation: $*" >&2
+    exit 1
+fi
+if [ "${MOCK_BLOCKDEV_GETSZ_EXIT:-0}" != '0' ]; then
+    exit "${MOCK_BLOCKDEV_GETSZ_EXIT}"
+fi
+printf '%s\n' "${MOCK_BLOCKDEV_GETSZ:-16777216}"
+exit 0
+EOF
+    chmod +x "$bin/blockdev"
+
+    # partx --add --nr N -- DEVICE: sfdisk --no-tell-kernelでdisk上にのみ
+    # 書き込んだ新規パーティションを、カーネルへ個別登録する処理 (Mode B
+    # 専用)。実partxの引数仕様 ("-a|-d|-s|-u ... <disk>") のうち、
+    # production側が実際に使う "--add --nr N -- DEVICE" (正確に5引数) の
+    # みを受け付ける。件数・順序のいずれかが想定と異なる場合は、想定外の
+    # 呼び出しとして明示的に拒否する。
+    cat > "$bin/partx" <<EOF
+#!/bin/sh
+SANDBOX='$sandbox'
+: > "\$SANDBOX/work/partx-called" 2>/dev/null || :
+printf '%s\n' "\$*" >> "\$SANDBOX/work/partx-invocations"
+
+case "\$*" in
+    *--help*)
+        if [ "\${MOCK_PARTX_HELP_MISSING_ADD:-0}" != '1' ]; then
+            printf ' -a, --add            add specified partitions or all of them\n'
+        fi
+        if [ "\${MOCK_PARTX_HELP_MISSING_NR:-0}" != '1' ]; then
+            printf ' -n, --nr <n:m>       specify the range of partitions (e.g. --nr 2:4)\n'
+        fi
+        exit 0
+        ;;
+esac
+
+if [ "\$#" -ne 5 ] || [ "\$1" != '--add' ] || [ "\$2" != '--nr' ] || [ "\$4" != '--' ]; then
+    echo "mock partx: unrecognized invocation: \$*" >&2
+    exit 1
+fi
+
+if [ -n "\${MOCK_PARTX_ADD_STDERR:-}" ]; then
+    printf '%s\n' "\${MOCK_PARTX_ADD_STDERR}" >&2
+fi
+if [ "\${MOCK_PARTX_ADD_EXIT:-0}" != '0' ]; then
+    exit "\${MOCK_PARTX_ADD_EXIT}"
+fi
+exit 0
+EOF
+    chmod +x "$bin/partx"
 
     # MOCK_CONF_PATH_IS_DIR: persistence.confの書き込み失敗
     # (helper側の終了コード24) を決定論的に再現するためのフック。
@@ -666,6 +920,7 @@ EOF
 #!/bin/sh
 : > "$sandbox/work/sudo-called"
 printf 'x\n' >> "$sandbox/work/sudo-invocations"
+printf '%s\n' "\$*" >> "$sandbox/work/sudo-args"
 if [ "\${MOCK_SUDO_FAIL:-0}" = '1' ]; then
     printf 'sudo: a password is required\n' >&2
     exit 1

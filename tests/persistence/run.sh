@@ -46,6 +46,24 @@ fi
 
 echo
 echo "############################################"
+echo "# helper same-usb (create-same-usb, Mode B) test suite"
+echo "############################################"
+sh "$TESTS_DIR/test_helper_same_usb.sh" && same_usb_rc=0 || same_usb_rc=$?
+if [ "$same_usb_rc" -ne 0 ]; then
+    overall_rc=1
+fi
+
+echo
+echo "############################################"
+echo "# GUI same-usb (create-same-usb, Mode B) test suite"
+echo "############################################"
+sh "$TESTS_DIR/test_gui_same_usb.sh" && gui_same_usb_rc=0 || gui_same_usb_rc=$?
+if [ "$gui_same_usb_rc" -ne 0 ]; then
+    overall_rc=1
+fi
+
+echo
+echo "############################################"
 echo "# production integrity (post-run)"
 echo "############################################"
 POST_SHA_RUN="$(sha256sum "$PROD_GUI" "$PROD_HELPER")"
@@ -57,5 +75,5 @@ else
 fi
 
 echo
-echo "GUI suite exit=$gui_rc / helper suite exit=$helper_rc / failure-matrix suite exit=$matrix_rc / overall=$overall_rc"
+echo "GUI suite exit=$gui_rc / helper suite exit=$helper_rc / failure-matrix suite exit=$matrix_rc / helper same-usb suite exit=$same_usb_rc / GUI same-usb suite exit=$gui_same_usb_rc / overall=$overall_rc"
 exit "$overall_rc"

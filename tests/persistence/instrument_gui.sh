@@ -45,12 +45,12 @@ instrument_gui() {
     apply_rule gui-sys-block \
         '/sys/block/' \
         '@@SANDBOX_SYS@@/block/' \
-        1 "$dest"
+        2 "$dest"
 
     apply_rule gui-sys-class-block \
         '/sys/class/block/' \
         '@@SANDBOX_SYS@@/class/block/' \
-        1 "$dest"
+        2 "$dest"
 
     apply_rule gui-proc-cmdline \
         'cat /proc/cmdline' \
@@ -63,17 +63,37 @@ instrument_gui() {
         1 "$dest"
 
     # check_live_env の判定文・エラーメッセージ・build_candidates の
-    # findmnt --target の計3箇所に同一リテラルが出現する。
+    # findmnt --target・build_same_usb_candidate (Mode B) のfindmnt
+    # --target の計4箇所に同一リテラルが出現する。
     apply_rule gui-run-live-medium \
         '/run/live/medium' \
         '@@SANDBOX_RUN@@/live/medium' \
-        3 "$dest"
+        4 "$dest"
 
     # ancestor_knames_of_source: root/mknod無しで実block deviceを
     # 用意できないため、通常ファイルの存在確認 (-e) へ緩和する。
     apply_rule gui-ancestor-b-relax \
         '\[ ! -b "\$src" \]' \
         '[ ! -e "$src" ]' \
+        1 "$dest"
+
+    # build_same_usb_candidate (Mode B) 専用の -b -> -e 緩和 (同じ理由)。
+    apply_rule gui-same-usb-src-b-relax \
+        '\[ -b "\$src" \] \|\| return 0' \
+        '[ -e "$src" ] || return 0' \
+        1 "$dest"
+    apply_rule gui-same-usb-disk-path-b-relax \
+        '\[ -b "\$disk_path" \] \|\| return 0' \
+        '[ -e "$disk_path" ] || return 0' \
+        1 "$dest"
+
+    # build_same_usb_candidateはdisk_knameから "/dev/$disk_kname" を
+    # 構築する (build_candidates とは異なり、lsblkの出力からPATHを
+    # 読み取るのではなく、この1箇所だけ自前で構築する)。テストでは
+    # sandbox/dev配下を指すよう置換する。
+    apply_rule gui-same-usb-disk-path-construction \
+        'disk_path="/dev/\$disk_kname"' \
+        'disk_path="@@SANDBOX_DEV@@/\$disk_kname"' \
         1 "$dest"
 
     # kill呼び出しを絶対パスの完全モックへ置換する。dash組み込みの kill は
@@ -100,6 +120,7 @@ instrument_gui() {
     resolve_token '@@SANDBOX_PROC_CMDLINE@@' "$sandbox/proc/cmdline" "$dest"
     resolve_token '@@SANDBOX_PROC_SWAPS@@' "$sandbox/proc/swaps" "$dest"
     resolve_token '@@SANDBOX_RUN@@' "$sandbox/run" "$dest"
+    resolve_token '@@SANDBOX_DEV@@' "$sandbox/dev" "$dest"
 
     chmod +x "$dest"
 
