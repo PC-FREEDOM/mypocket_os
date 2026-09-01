@@ -65,11 +65,11 @@ LOCK_DIR_PATH="$SANDBOX/run/lock/mypocketos-persistence-setup-helper.lock"
 SCENARIO_COUNT=0
 
 # シナリオを追加・削除した場合は、この値も同じ変更の中で更新すること。
-# ファイル末尾でSCENARIO_COUNTと突き合わせ、不一致なら (258アサーション
+# ファイル末尾でSCENARIO_COUNTと突き合わせ、不一致なら (263アサーション
 # とは別枠で) 失敗マトリクス全体を非0終了にする。条件分岐によるシナリオの
 # 意図しないスキップ・二重実行を検出するための構造検査であり、258件の
 # 既存アサーションには加算しない。
-EXPECTED_SCENARIOS=51
+EXPECTED_SCENARIOS=52
 
 setup_default_sys_tree() {
     rm -rf "$SANDBOX/sys"
@@ -621,6 +621,16 @@ assert_stage_bounds mx24_content_mismatch yes yes yes no
 assert_lock_released mx24_content_mismatch
 assert_run_clean mx24_content_mismatch
 
+# 2行目 (/etc/NetworkManager/system-connections) だけが欠落した場合も、
+# 「含まれていればOK」のような緩い判定にはせず、1行目のみとは完全一致
+# しないためfail-closedとなることを確認する。
+reset_scenario_state
+run_success_track_case mx24_second_line_missing 24 MOCK_FAKE_CONF_CONTENT='/home'
+assert_stderr mx24_second_line_missing '内容確認に失敗しました'
+assert_stage_bounds mx24_second_line_missing yes yes yes no
+assert_lock_released mx24_second_line_missing
+assert_run_clean mx24_second_line_missing
+
 # ---------- exit 25: sync/umount失敗 ----------
 reset_scenario_state
 run_success_track_case mx25_sync_fail 25 MOCK_FAIL_SYNC=1
@@ -676,7 +686,7 @@ echo "== helper failure-matrix summary =="
 printf '%s' "$RESULTS"
 echo "SCENARIOS=$SCENARIO_COUNT PASS=$PASS FAIL=$FAIL"
 
-# 構造検査 (258件のアサーションには含めない): 実行されたシナリオ数が
+# 構造検査 (263件のアサーションには含めない): 実行されたシナリオ数が
 # 期待値と一致しない場合、意図しないシナリオの追加・削除・条件付き
 # スキップ・二重実行が疑われるため、PASS/FAILの値に関わらず失敗マトリクス
 # 全体を非0終了にする。

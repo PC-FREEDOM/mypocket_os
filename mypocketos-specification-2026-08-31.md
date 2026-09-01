@@ -240,7 +240,6 @@ Baseとの差：
   - `Super + Right`：右半分
   - `Super + Up`：最大化
   - `Super + Down`：最大化解除
-- Persistence利用時にWi-Fiパスワード等のNetworkManager設定も保持できるようにする
 - 消音時アイコンを「スピーカー＋×」として明確に判別できるデザインへ変更
 - tint2へ電源管理／バッテリー表示を追加し、可能なら残量を％表示
 
@@ -338,13 +337,13 @@ Volume IDの変更は優先度高、最初のブート画面は優先度低と�
 | ファイルシステム | ext4 |
 | ラベル | `persistence` |
 | 設定ファイル | パーティションルートの`persistence.conf` |
-| 現行設定 | `/home`の1行 |
-| 現行保存対象 | `/home`配下のユーザーデータ・一般アプリ設定 |
+| 現行設定 | `/home`と`/etc/NetworkManager/system-connections`の2行 (いずれもオプションなしのデフォルトbindマウント、独立したcustom mount) |
+| 現行保存対象 | `/home`配下のユーザーデータ・一般アプリ設定、およびNetworkManagerのWi-Fi接続プロファイル (SSID・PSK等) |
 | 非保存 | 追加アプリ本体、APTキャッシュ、カーネル、基本システム |
 | 暗号化 | 初回公開版ではなし |
 | `/ union` | 採用しない |
 
-注：Wi-Fiパスワード等のNetworkManager設定保持は初回公開前追加候補。実装する場合、現行「`/home`のみ」というPersistenceモデルをどのように拡張するかを別途設計する。
+Wi-Fi／NetworkManager設定のPersistenceは実装済み。ただし本節時点でVM/実機での動作確認は未実施であり、17節「初回公開版の完了条件」で別途管理する。認証情報が無暗号化のまま保存される点の注意は14節を参照。
 
 ## 8.2 Persistence Setup
 
@@ -692,6 +691,10 @@ Fluent archive：
 - 「匿名OS」「痕跡を残さない」「Tailsと同等に安全」と表現しない
 - Liveでも内蔵ストレージを手動mountすれば書込みが起こり得る
 - Persistenceは初回版では暗号化されない
+- Persistence USBを紛失・盗難された場合、`/home`の内容に加えて
+  `/etc/NetworkManager/system-connections`配下に保存されたWi-Fi接続の
+  認証情報 (PSK等) も無暗号化のまま読み取られ得ることを利用者へ明示する
+  (8.1節)
 - 保存範囲を実装済み仕様に合わせて正確に説明
 - ISO／IMGへSHA-256を提供
 - 未実施の確認を「確認済み」と記載しない
@@ -712,6 +715,7 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - edition別ISO
 - Normal Live／Persistence／Fail-safe
 - `/home` Persistence
+- Wi-Fi／NetworkManager設定のPersistence (VM/実機確認前)
 - Mode A
 - Mode B
 - USB persistence IMG
@@ -731,12 +735,11 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 ## 16.1 実装・仕上げ候補
 
 1. Openbox `Super + 矢印` ウィンドウスナップ
-2. Wi-Fi／NetworkManager設定のPersistence
-3. ミュートアイコンを「スピーカー＋×」へ
-4. tint2へ電源管理／バッテリー％表示
-5. ISO/USB Volume IDをMyPocketOSへ
-6. Persistence存在時の起動既定選択を検討
-7. 最初のブート画面のDebian表記をMyPocketOSへ
+2. ミュートアイコンを「スピーカー＋×」へ
+3. tint2へ電源管理／バッテリー％表示
+4. ISO/USB Volume IDをMyPocketOSへ
+5. Persistence存在時の起動既定選択を検討
+6. 最初のブート画面のDebian表記をMyPocketOSへ
 
 原則1機能1feature branch。
 
@@ -748,6 +751,7 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - Secure Boot
 - 最低RAM
 - 必要に応じDebian Installer E2E
+- Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode A／Mode B／USB persistence IMGの3経路、8.1節参照)
 
 ## 16.3 配布仕様
 
@@ -778,6 +782,7 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 | 実USB Mode B Persistence | ✅ |
 | Persistence再起動後 `/home`保持 | ✅ |
 | Normal Liveとの分離 | ✅ |
+| Persistence再起動後Wi-Fi設定保持 (VM/実機) | ⬜ |
 | 実USB UEFI | ⬜ |
 | Persistence作成済みUSBのUEFI | ⬜ |
 | Secure Boot | ⬜ |
@@ -796,6 +801,7 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - Base／Standard
 - Normal Live／Persistence／Fail-safe
 - `/home` Persistence
+- Wi-Fi／NetworkManager設定のPersistence
 - Mode A／Mode B
 - USB persistence IMG
 - 日本語環境

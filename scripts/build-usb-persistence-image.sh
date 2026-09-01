@@ -4,7 +4,8 @@
 #
 # MyPocketOSの通常ISO (live-image-amd64.hybrid.iso) とは別成果物として、
 # 単一のGPT/MBR/APM/El Toritoハイブリッド構造に、persistence用の第3
-# パーティション (ext4, LABEL=persistence, persistence.conf="/home") を
+# パーティション (ext4, LABEL=persistence、persistence.confは
+# "/home" と "/etc/NetworkManager/system-connections" の2行) を
 # 追加したIMGファイルを、単一のxorriso生成処理で作る。
 #
 # 設計方針:
@@ -496,7 +497,15 @@ echo
 echo "== persistence.img生成 =="
 PERSIST_POPULATE_DIR="$WORKROOT/persist_populate"
 "$CMD_MKDIR" -p -- "$PERSIST_POPULATE_DIR"
-printf '/home\n' > "$PERSIST_POPULATE_DIR/persistence.conf"
+# live-bootのpersistence.conf標準構文に従い、オプションなし (デフォルト
+# bindマウント) の2行で、/home (ユーザーデータ) と
+# /etc/NetworkManager/system-connections (Wi-Fi等の接続プロファイル) を
+# 独立したcustom mountとして永続化する。union/link等の他オプションは
+# 使用しない。mypocketos-persistence-setup-helperのfinalize_persistence_filesystem
+# と内容を完全一致させること (AGENTS.md 14節)。
+CONF_EXPECTED_CONTENT='/home
+/etc/NetworkManager/system-connections'
+printf '%s\n' "$CONF_EXPECTED_CONTENT" > "$PERSIST_POPULATE_DIR/persistence.conf"
 
 PERSISTENCE_IMG="$WORKROOT/persistence.img"
 "$CMD_MKE2FS" -F -t ext4 -L persistence -d "$PERSIST_POPULATE_DIR" \
@@ -541,21 +550,26 @@ verify_persistence_conf() {
     stat_group="$(printf '%s\n' "$stat_out" | "$CMD_SED" -nE 's/^User:.*Group:[[:space:]]+([0-9]+).*/\1/p')"
     stat_size="$(printf '%s\n' "$stat_out" | "$CMD_SED" -nE 's/^User:.*Size:[[:space:]]+([0-9]+)[[:space:]]*$/\1/p')"
 
+    # 期待バイト数は決め打ちにせず、実際に書き込んだ内容
+    # (CONF_EXPECTED_CONTENT) の文字数+末尾改行1個からその場で算出する
+    # (2026-09-01時点でこの内容は45バイトになる)。
+    conf_expected_size=$((${#CONF_EXPECTED_CONTENT} + 1))
+
     [ "$stat_type" = 'regular' ] || return 1
     [ "$stat_mode" = '0600' ] || return 1
     [ "$stat_user" = '0' ] || return 1
     [ "$stat_group" = '0' ] || return 1
-    [ "$stat_size" = '6' ] || return 1
+    [ "$stat_size" = "$conf_expected_size" ] || return 1
 
     content="$("$CMD_DEBUGFS" -R 'cat /persistence.conf' -- "$img" 2>/dev/null)"
-    [ "$content" = '/home' ] || return 1
+    [ "$content" = "$CONF_EXPECTED_CONTENT" ] || return 1
 
     return 0
 }
 
 verify_persistence_conf "$PERSISTENCE_IMG" \
     || fail 32 "persistence.img内persistence.confのinode/content検証に失敗しました"
-echo "persistence.conf: UID=0 GID=0 Mode=0600 Size=6 内容=/home を確認"
+echo "persistence.conf: UID=0 GID=0 Mode=0600 Size=${conf_expected_size} 内容=/home,/etc/NetworkManager/system-connections を確認"
 echo
 
 # ---- xorriso単一生成 ---------------------------------------------------------

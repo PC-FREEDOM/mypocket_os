@@ -170,11 +170,15 @@ if [ -e "$SANDBOX/run/lock/mypocketos-persistence-setup-helper.lock" ]; then
 else
     log_bool 'same_usb_happy_path_lock_removed' 1
 fi
+# persistence.conf の内容 (/home と /etc/NetworkManager/system-connections
+# の2行、末尾改行込み45バイト) を確認する。
+expected_conf_content='/home
+/etc/NetworkManager/system-connections'
 snapshot="$SANDBOX/work/persistence.conf.snapshot"
 if [ -e "$snapshot" ]; then
     snapshot_size="$(wc -c < "$snapshot")"
     snapshot_content="$(cat -- "$snapshot")"
-    if [ "$snapshot_size" -eq 6 ] && [ "$snapshot_content" = '/home' ]; then
+    if [ "$snapshot_size" -eq 45 ] && [ "$snapshot_content" = "$expected_conf_content" ]; then
         log_bool 'same_usb_happy_path_persistence_conf_content' 1
     else
         log_bool 'same_usb_happy_path_persistence_conf_content' 0

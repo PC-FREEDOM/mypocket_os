@@ -973,7 +973,7 @@ if [ "$selected_mode" = 'B' ]; then
     # 一覧表示と確認ダイアログの数値表記を必ず一致させる。
     free_space_text="$(printf '%s' "$selected" | awk -F'\001' '{print $2}')"
 
-    confirm_text="$(printf '永続領域を作成します。\n対象: %s\n使用する空き容量: %s\n\nMyPocketOSの起動領域 (ISOイメージ・EFI領域) は変更しません。\n/home のファイルと設定を保存するための領域を、USBの空き部分に新しく作成します。\n\nこの操作を実行しますか？' \
+    confirm_text="$(printf '永続領域を作成します。\n対象: %s\n使用する空き容量: %s\n\nMyPocketOSの起動領域 (ISOイメージ・EFI領域) は変更しません。\nホームフォルダーとWi-Fi接続設定を保存するための領域を、USBの空き部分に新しく作成します。\n\nこの操作を実行しますか？' \
         "$selected_path" "${free_space_text:-不明}")"
 
     confirm_rc=0

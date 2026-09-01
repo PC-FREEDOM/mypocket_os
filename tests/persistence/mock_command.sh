@@ -407,7 +407,9 @@ case "\$fmt" in
         exit 0
         ;;
     '%s')
-        printf '%s' "\${MOCK_CONF_SIZE:-6}"
+        # 既定値45は persistence.conf の現行内容
+        # ("/home\n/etc/NetworkManager/system-connections\n") の実バイト数。
+        printf '%s' "\${MOCK_CONF_SIZE:-45}"
         exit 0
         ;;
     *)
