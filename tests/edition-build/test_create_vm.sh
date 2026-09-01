@@ -11,10 +11,23 @@
 # ディスクの存在確認で、より早い段階で安全側に停止してしまうため。これ自体は
 # 正しい既存の安全動作であり、今回壊していない)。
 #
+# また、create-test-vm.sh自身もDebianホスト専用の判定
+# (/etc/os-release の ID=debian、production自身の制約でありこれは変更
+# しない) を、診断ブロック ("== 処理対象の絶対パス ==") より前に持っている。
+# このため、テスト実行ホスト自身が非Debianの場合 (GitHub ActionsのUbuntu
+# runner等)、診断ブロックが一切出力されず、それを前提とする検証が失敗する
+# (tests/edition-build/test_update_iso.sh で先に対応した問題と同種)。
+# production自体は変更せず、sandboxへコピーしたcreate-test-vm.shのコピー
+# だけを対象に、実ホストの/etc/os-releaseではなくsandbox内fixture
+# (ID=debianのみを持つ最小限のファイル) を読むようinstrumentすることで、
+# テスト実行ホストのOSに関わらずこの検証を実行できるようにする。対象は
+# 実際のファイル読み取りに使われている行1箇所のみとし、エラーメッセージ
+# 内の"/etc/os-release"という説明文字列は変更しない。
+#
 # そのため、このテストは以下の2段構成にする。
 #
 # 1. 引数解析 (edition必須化・--firmwareとの併用) は、virsh呼び出しより
-#    前に完結するため、実スクリプトを直接実行して検証する。受理された
+#    前に完結するため、sandbox化したコピーを実行して検証する。受理された
 #    引数の組み合わせについては、スクリプトが出力する診断ブロック
 #    ("== 処理対象の絶対パス ==") の内容 (edition・ISOソース・VM名・
 #    ファームウェア) を見て、editionからISO名・VM名への解決が正しいことを
@@ -23,7 +36,7 @@
 # 2. 「ISO不存在ならvirt-installへ進まない」「不正editionならvirsh等を
 #    呼ばない」という安全性は、上記の環境制約により実行時には確認できない
 #    ため、静的な構造確認 (ISO存在チェックがvirt-install呼び出しより前に
-#    存在すること) で代替する。
+#    存在すること) で代替する (production側の実ファイルを対象とする)。
 #
 set -eu
 
@@ -44,8 +57,41 @@ check() {
 	fi
 }
 
-MOCKBIN="$(mktemp -d)"
-trap 'rm -rf "${MOCKBIN}"' EXIT
+SANDBOX="$(mktemp -d)"
+MOCKBIN="${SANDBOX}/mockbin"
+mkdir -p "${MOCKBIN}" "${SANDBOX}/scripts" "${SANDBOX}/etc"
+trap 'rm -rf "${SANDBOX}"' EXIT
+
+cp -- "${PROD_SCRIPT}" "${SANDBOX}/scripts/create-test-vm.sh"
+chmod +x "${SANDBOX}/scripts/create-test-vm.sh"
+
+# Debianホスト判定行 (/etc/os-release への実ファイル読み取りを行っている
+# 箇所) が想定どおり1件だけ存在することを確認したうえで、sandbox内
+# fixtureを読むよう置換する。sedではなくawkの完全一致比較を用いることで、
+# この行に含まれる正規表現特殊文字 ([ ] $ ' ^ !) のエスケープ問題を
+# 避ける (tests/edition-build/test_update_iso.sh と同じ手法)。production
+# 側の判定ロジック自体 (ID=debianでなければ拒否する) は変更しない。
+OS_RELEASE_CHECK_LINE="if [ ! -r /etc/os-release ] || ! grep -q '^ID=debian\$' /etc/os-release; then"
+os_release_check_count="$(grep -cF "${OS_RELEASE_CHECK_LINE}" "${SANDBOX}/scripts/create-test-vm.sh")" || os_release_check_count=0
+if [ "${os_release_check_count}" -ne 1 ]; then
+	echo "FAIL: sandboxed copy内のos-release判定行の出現件数が想定 (1件) と一致しません (検出: ${os_release_check_count}件)。production script側が変更された可能性があります。" >&2
+	exit 1
+fi
+
+OS_RELEASE_FIXTURE="${SANDBOX}/etc/os-release"
+# production側が実際に必要としている情報はID=debianのみのため、
+# バージョン番号等の不要な情報は持たせない最小限のfixtureとする。
+printf 'ID=debian\n' >"${OS_RELEASE_FIXTURE}"
+
+OS_RELEASE_CHECK_LINE_NEW="if [ ! -r \"${OS_RELEASE_FIXTURE}\" ] || ! grep -q '^ID=debian\$' \"${OS_RELEASE_FIXTURE}\"; then"
+awk -v old="${OS_RELEASE_CHECK_LINE}" -v new="${OS_RELEASE_CHECK_LINE_NEW}" '
+	$0 == old { print new; next }
+	{ print }
+' "${SANDBOX}/scripts/create-test-vm.sh" >"${SANDBOX}/scripts/create-test-vm.sh.new"
+mv -- "${SANDBOX}/scripts/create-test-vm.sh.new" "${SANDBOX}/scripts/create-test-vm.sh"
+chmod +x "${SANDBOX}/scripts/create-test-vm.sh"
+
+SANDBOXED_SCRIPT="${SANDBOX}/scripts/create-test-vm.sh"
 
 # virsh: 呼び出し自体を記録するだけの最小モック (何をされても失敗として
 # 応答する。「不正editionならvirsh等を呼ばない」を検証する用途のみに使う)。
@@ -59,7 +105,7 @@ chmod +x "${MOCKBIN}/virsh"
 
 run_create() {
 	: >"${CALLS_FILE}"
-	PATH="${MOCKBIN}:${PATH}" "${PROD_SCRIPT}" "$@"
+	PATH="${MOCKBIN}:${PATH}" "${SANDBOXED_SCRIPT}" "$@"
 }
 
 # ==============================================================================
