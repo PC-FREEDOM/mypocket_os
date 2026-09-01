@@ -1,0 +1,157 @@
+name: MyPocketOS test suites
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mypocketos-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mypocketos-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # tests/persistence/・tests/edition-build/・tests/desktop-polish/・
+      # tests/usb-persistence-image/ の4スイートを、同一job内の独立した
+      # step (スイートごと) として順に実行する。既存の
+      # persistence-mock-tests.yml のfail-closedなツール確認方針
+      # (必要なコマンドを明示的に列挙し、想定外の欠落は即座に失敗させる)
+      # を踏襲したうえで、edition-build/desktop-polishが追加で使う
+      # python3 (test_icon_theme.sh・test_menu.sh、標準ライブラリのみ)・
+      # tar (test_fluent_archive.sh、読み取り専用のtar -tzfのみ)・
+      # git (test_package_lists.sh) をあわせて確認対象へ含める。
+      # dash・xorriso・e2fsprogs (mke2fs/e2fsck/debugfs) は
+      # persistence-mock-tests.yml と同じ理由 (production側の
+      # check_required_commands・実sfdisk等が要求するため) で必要となる。
+      # python3・tar・gitは ubuntu-latest に標準搭載されている想定のため、
+      # 不足時の自動インストールは行わず、dash等と同様に明示チェックのみ
+      # 行い、欠落していれば即座に失敗させる (不要なパッケージ追加をしない
+      # ため)。
+      - name: Verify required tools
+        run: |
+          set -euo pipefail
+
+          need_dash=0
+          need_xorriso=0
+          need_e2fsprogs=0
+          for cmd in \
+            sh dash env sha256sum mktemp mkdir rmdir rm chmod cp mv \
+            sed grep awk cut ls tail sleep find wc dirname \
+            stat dd cmp diff realpath ln df timeout head cat tr truncate \
+            python3 tar git
+          do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              case "$cmd" in
+                dash) need_dash=1 ;;
+                *)
+                  echo "unexpected missing tool: $cmd" >&2
+                  exit 1
+                  ;;
+              esac
+            fi
+          done
+
+          command -v xorriso >/dev/null 2>&1 || need_xorriso=1
+          command -v mke2fs >/dev/null 2>&1 || need_e2fsprogs=1
+
+          if [ "$need_dash" -eq 1 ] || [ "$need_xorriso" -eq 1 ] || [ "$need_e2fsprogs" -eq 1 ]; then
+            sudo apt-get update
+            pkgs=''
+            [ "$need_dash" -eq 1 ] && pkgs="$pkgs dash"
+            [ "$need_xorriso" -eq 1 ] && pkgs="$pkgs xorriso"
+            [ "$need_e2fsprogs" -eq 1 ] && pkgs="$pkgs e2fsprogs"
+            # shellcheck disable=SC2086
+            sudo apt-get install --yes --no-install-recommends $pkgs
+
+            command -v dash >/dev/null 2>&1 || {
+              echo "dash still missing after install" >&2
+              exit 1
+            }
+            command -v xorriso >/dev/null 2>&1 || {
+              echo "xorriso still missing after install" >&2
+              exit 1
+            }
+            command -v mke2fs >/dev/null 2>&1 || {
+              echo "mke2fs (e2fsprogs) still missing after install" >&2
+              exit 1
+            }
+          fi
+
+      # Persistence関連 (GUI/helper・USB persistence IMG生成スクリプト) の
+      # production不変確認は、既存 persistence-mock-tests.yml と同じ対象
+      # ファイル・同じ方式のまま維持する (今回、対象ファイルの拡大は
+      # 行わない)。edition-build固有のproduction整合性確認は
+      # tests/edition-build/run.sh 自身が既に内蔵しているため、ここでは
+      # 重複させない。最終的に、リポジトリ全体に対する git diff / git
+      # status による包括的な変更検出 (下記 "Verify repository integrity"
+      # step) が、それ以外のファイル (desktop-polish関連等) も含めて
+      # カバーする。
+      - name: Capture production checksums (pre)
+        run: |
+          set -euo pipefail
+          sha256sum \
+            config/includes.chroot/usr/local/bin/mypocketos-persistence-setup \
+            config/includes.chroot/usr/local/libexec/mypocketos-persistence-setup-helper \
+            scripts/build-usb-persistence-image.sh \
+            > /tmp/persistence-prod.sha256.pre
+
+      - name: Run persistence mock test suite
+        run: sh tests/persistence/run.sh
+
+      - name: Run edition-build test suite
+        run: sh tests/edition-build/run.sh
+
+      - name: Run desktop-polish test suite
+        run: sh tests/desktop-polish/run.sh
+
+      - name: Run usb-persistence-image test suite
+        run: sh tests/usb-persistence-image/run.sh
+
+      - name: Verify repository integrity
+        if: always()
+        run: |
+          # 意図的に "set -e" を使わない: 個々の検査 (SHA256・git diff・
+          # git diff --cached・git status) はどれか1つが失敗しても、
+          # 残りの検査を必ず全て実行し、まとめて報告する。integrity_rc
+          # へ失敗を集約し、最後にその値でjobを失敗させる。
+          set -uo pipefail
+
+          integrity_rc=0
+
+          if ! sha256sum -c /tmp/persistence-prod.sha256.pre; then
+            echo 'production GUI/helper/script SHA-256 mismatch' >&2
+            integrity_rc=1
+          fi
+
+          if ! git diff --exit-code; then
+            echo 'unexpected unstaged changes (git diff)' >&2
+            integrity_rc=1
+          fi
+
+          if ! git diff --cached --exit-code; then
+            echo 'unexpected staged changes (git diff --cached)' >&2
+            integrity_rc=1
+          fi
+
+          status_output="$(git status --porcelain)"
+          if [ -n "$status_output" ]; then
+            echo 'unexpected working-tree changes (git status --porcelain):' >&2
+            echo "$status_output" >&2
+            integrity_rc=1
+          fi
+
+          exit "$integrity_rc"
