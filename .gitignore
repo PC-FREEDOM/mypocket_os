@@ -39,3 +39,7 @@
 !/config/hooks/live/mypocketos-*
 /config/hooks/normal/*
 !/config/hooks/normal/mypocketos-*
+
+# AGENTS.md 16節: AIエージェントが作業完了時に生成するレビュー用Markdown
+# レポート。一時的なレビュー成果物であり、Git管理対象に含めない。
+/reports/ai-review/
