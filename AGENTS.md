@@ -127,11 +127,13 @@ AIエージェントは、実機/VM検証や重要な製品判断が必要な場
 
 ## 9. PR前に確認すべき4テストスイート
 
-コードに変更を加えた場合、変更内容に関連するか否かに関わらず、PRを作成する前に
-以下の4つを実行し、結果(件数・PASS/FAIL)を報告すること。一部はCIに未統合のため
-(現状 `persistence-mock-tests` workflowで自動実行されるのは
-`tests/persistence/run.sh` と `tests/usb-persistence-image/run.sh` のみ)、
-手動での実行確認が特に重要である。
+以下の4スイートは、`.github/workflows/mypocketos-tests.yml` の
+`mypocketos-tests` jobとしてGitHub Actions上に自動統合されている
+(mainの必須status checksは `static-checks` と `mypocketos-tests` の2件)。
+ただし、GitHub Actions上のPASSはローカルでの実行確認の**代替ではなく**、
+あくまで追加の自動検証として扱う。コードに変更を加えた場合、変更内容に
+関連するか否かに関わらず、AIエージェントはローカルで実行可能な場合、
+PRを作成する前にも以下4つを実行し、結果(件数・PASS/FAIL)を報告すること。
 
 ```bash
 sh tests/persistence/run.sh
@@ -139,6 +141,10 @@ sh tests/edition-build/run.sh
 sh tests/desktop-polish/run.sh
 sh tests/usb-persistence-image/run.sh
 ```
+
+GitHub Actions上でのPASSと、VM/実機での目視検証は引き続き別物である
+(8節・11節参照)。CIがPASSしていることをもって、実機/VM検証が完了した
+かのように報告してはならない。
 
 ## 10. `git diff --check` 等の静的確認
 
