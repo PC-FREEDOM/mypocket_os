@@ -1151,6 +1151,44 @@ TPMは接続なし) を用意して使用した。いずれのVMにも次のみ�
   インストールしたアプリ本体の永続化 (いずれも「初版のスコープ外」節
   参照)。
 
+#### Mode B Wi-Fi Persistence 実機E2E検証 (2026-09-02)
+
+feature branch `feat/persistence-wifi-networkmanager` (commit
+`38fc0fe1b884102c9c487abaa9c1652329f750ab`) のBase版ISOを実機のUSBメモリへ
+書き込み、Mode B (同一起動USBの末尾未使用領域) でPersistence領域を作成した
+うえで、Wi-Fi Persistenceの実機E2Eを実施した。
+
+- 通常Liveから「永続領域を作成」を実行し、候補一覧の「MyPocketOS 起動USB」
+  を選択、ERASE警告やtype-to-confirmが表示されないこと (Mode Bであること)
+  を確認したうえで、永続領域の作成に成功した。
+- Persistenceモードで再起動後、`findmnt`により`/home`・
+  `/etc/NetworkManager/system-connections`の両方が、同一の`persistence`
+  ラベルのext4パーティションからマウントされていることを確認した。
+- GUI (nm-applet) からWi-Fiへ接続し、`/etc/NetworkManager/system-connections/`
+  配下に接続プロファイル (`<SSID>.nmconnection`) が所有者`root:root`・
+  パーミッション`600`で作成されることを確認した。
+- 再起動しPersistenceモードで再度起動したところ、パスワード再入力なしで
+  同じWi-Fiへ自動接続すること、接続プロファイルの所有者・パーミッションが
+  維持されていることを確認した。
+- `/home`側のテストファイルも、再起動後に保持されていることを確認した
+  (既存の`/home` Persistenceへの回帰がないことの確認を兼ねる)。
+- 通常Live (`nopersistence`) で起動すると、Wi-Fi接続・接続プロファイル・
+  `/home`のテストファイルのいずれも見えないことを確認した。
+
+**この検証で確認していない事項**
+
+- 使用した実機のブート方式 (Legacy BIOS / UEFI) は記録されておらず未確認。
+- Mode A (別ディスク全体) でのWi-Fi Persistence実機/VM確認。
+- USB persistence IMG (`build-usb-persistence-image.sh`) 経由でのWi-Fi
+  Persistence実機/VM確認。
+- UEFI環境・Secure Boot環境でのWi-Fi Persistence確認。
+- 複数のWi-Fiプロファイルを記憶させた場合の挙動。
+
+検証中に、今回の検証対象とは別のUSBメモリでのI/Oエラー、および別の
+USBメモリでの書き込み後起動失敗が確認されたが、いずれも本機能のコードとは
+無関係なUSBハードウェア側の問題として切り分けており、上記の結果に影響
+していない。
+
 ## USB persistence IMG生成 (試作)
 
 `scripts/build-usb-persistence-image.sh` は、通常のedition別ISO

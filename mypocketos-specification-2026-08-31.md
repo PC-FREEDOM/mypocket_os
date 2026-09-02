@@ -343,7 +343,7 @@ Volume IDの変更は優先度高、最初のブート画面は優先度低と�
 | 暗号化 | 初回公開版ではなし |
 | `/ union` | 採用しない |
 
-Wi-Fi／NetworkManager設定のPersistenceは実装済み。ただし本節時点でVM/実機での動作確認は未実施であり、17節「初回公開版の完了条件」で別途管理する。認証情報が無暗号化のまま保存される点の注意は14節を参照。
+Wi-Fi／NetworkManager設定のPersistenceは実装済み。2026-09-02、Mode B(同一起動USB)・実機・Legacy/UEFI未特定の環境で、Persistence起動時のWi-Fi再起動後自動接続・`/etc/NetworkManager/system-connections`のPersistenceマウント・接続プロファイルの`root:root`/`0600`・Normal Liveでの非表示・`/home`保持への非回帰を確認済み(詳細は17節)。Mode A・USB persistence IMG経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルでの動作は未確認のまま残っている。認証情報が無暗号化のまま保存される点の注意は14節を参照。
 
 ## 8.2 Persistence Setup
 
@@ -715,7 +715,7 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - edition別ISO
 - Normal Live／Persistence／Fail-safe
 - `/home` Persistence
-- Wi-Fi／NetworkManager設定のPersistence (VM/実機確認前)
+- Wi-Fi／NetworkManager設定のPersistence (Mode B実機確認済み、他経路は確認前)
 - Mode A
 - Mode B
 - USB persistence IMG
@@ -751,7 +751,7 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - Secure Boot
 - 最低RAM
 - 必要に応じDebian Installer E2E
-- Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode A／Mode B／USB persistence IMGの3経路、8.1節参照)
+- Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02に実機確認済み。Mode A／USB persistence IMG経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
 
 ## 16.3 配布仕様
 
@@ -782,7 +782,7 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 | 実USB Mode B Persistence | ✅ |
 | Persistence再起動後 `/home`保持 | ✅ |
 | Normal Liveとの分離 | ✅ |
-| Persistence再起動後Wi-Fi設定保持 (VM/実機) | ⬜ |
+| Persistence再起動後Wi-Fi設定保持 (VM/実機) | ✅ Mode B実機、2026-09-02時点(Mode A／USB persistence IMG／UEFI／Secure Boot未確認) |
 | 実USB UEFI | ⬜ |
 | Persistence作成済みUSBのUEFI | ⬜ |
 | Secure Boot | ⬜ |
