@@ -173,11 +173,19 @@ clock_dwheel_command =
 # 不要。/sys/class/power_supply を直接読むため upower 等も不要。バッテリー
 # 非搭載機では tint2 自身が自動的にBattery項目を非表示にする)。初回版は
 # 残量%のみのテキスト表示とし、グラフィカルなバッテリーアイコンは採用しない。
+#
+# bat1_fontは他のパネル文字(button_font/tooltip_font)と同じ"sans 10"を
+# 明示指定する。未指定のままだとtint2内部の既定フォント(DEFAULT_FONT
+# "sans 10"、tint2本体のsrc/panel.c参照)を1pt縮小したサイズ(実質
+# "sans 9"相当)が暗黙に使われ、隣接するclock(time1_font=sans bold 10 /
+# time2_font=sans 8)や他パネル文字と統一されない。tooltip_font(battery
+# ツールチップにも共通で使われる、tint2にitem別のtooltip fontはない)は
+# 既にsans 10のため変更不要。
 battery_tooltip_enabled = 1
 battery_low_status = 10
 battery_low_cmd =
 battery_full_cmd =
-bat1_font =
+bat1_font = sans 10
 bat1_format = %p
 bat2_font =
 bat2_format =

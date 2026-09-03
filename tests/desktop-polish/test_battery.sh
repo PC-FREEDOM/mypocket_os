@@ -52,9 +52,28 @@ check "bat1_format is exactly %p (percentage only)" \
 	grep -qx 'bat1_format = %p' "${TINT2RC}"
 check "bat2_format is empty (no second line, avoids 2-line display)" \
 	grep -qx 'bat2_format =' "${TINT2RC}"
-check "bat1_font is unset (inherits default, no custom font added)" \
-	grep -qx 'bat1_font =' "${TINT2RC}"
-check "bat2_font is unset" \
+#==========================
+# バッテリー%表示・ツールチップのフォントが既存UIと統一されていること
+# (button_font/tooltip_fontと同じ"sans 10"を明示指定する。未指定のまま
+# だとtint2内部の既定フォント(DEFAULT_FONT "sans 10"、tint2本体の
+# src/panel.c参照)を1pt縮小したサイズが暗黙に使われ、他パネル文字と
+# 統一されないため、明示指定を必須とする)
+#==========================
+check "bat1_font is explicitly set to sans 10 (matches button_font/tooltip_font)" \
+	grep -qx 'bat1_font = sans 10' "${TINT2RC}"
+check "bat1_font matches button_font exactly (same family and size)" \
+	sh -c '
+		bat1="$(grep "^bat1_font = " "$1" | sed "s/^bat1_font = //")"
+		btn="$(grep "^button_font = " "$1" | sed "s/^button_font = //")"
+		[ "$bat1" = "$btn" ]
+	' _ "${TINT2RC}"
+check "bat1_font matches tooltip_font exactly (battery tooltip uses the shared tooltip_font, no per-item override exists in tint2)" \
+	sh -c '
+		bat1="$(grep "^bat1_font = " "$1" | sed "s/^bat1_font = //")"
+		tt="$(grep "^tooltip_font = " "$1" | sed "s/^tooltip_font = //")"
+		[ "$bat1" = "$tt" ]
+	' _ "${TINT2RC}"
+check "bat2_font is left unset (bat2 is never rendered since bat2_format is empty)" \
 	grep -qx 'bat2_font =' "${TINT2RC}"
 
 #==========================
