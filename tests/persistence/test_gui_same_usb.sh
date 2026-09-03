@@ -50,7 +50,8 @@ reset_scenario_state() {
     setup_same_usb_sys_tree
     rm -f "$SANDBOX/work/notice.log" "$SANDBOX/work/sudo-called" \
           "$SANDBOX/work/sudo-invocations" "$SANDBOX/work/sudo-args" \
-          "$SANDBOX/work/progress-started" "$SANDBOX/work/mount-state" \
+          "$SANDBOX/work/progress-started" "$SANDBOX/work/progress-invocation" \
+          "$SANDBOX/work/mount-state" \
           "$SANDBOX/work/yad-list-stdin.txt" "$SANDBOX/work/mock-kill-invocations"
     : > "$SANDBOX/work/notice.log"
 }
@@ -176,6 +177,24 @@ if notice_shows 'MyPocketOSの起動領域'; then
     log_bool 'gui_same_usb_confirm_dispatch_shows_no_erase_of_boot_area' 1
 else
     log_bool 'gui_same_usb_confirm_dispatch_shows_no_erase_of_boot_area' 0
+fi
+
+# 進捗ダイアログが、数値パーセンテージではなく不定進捗 (pulsate) +
+# 固定の処理中メッセージで表示されていること (実機で確認された「0%の
+# まま停止しているように見える」UX問題の回帰防止、Mode B側)。
+progress_invocation="$SANDBOX/work/progress-invocation"
+progress_text_value=''
+if [ -e "$progress_invocation" ]; then
+    progress_text_value="$(grep -oE -- '--progress-text=[^ ]*' "$progress_invocation" | head -n1 | sed 's/^--progress-text=//')"
+fi
+if [ -e "$progress_invocation" ] \
+    && grep -qF -- '--pulsate' "$progress_invocation" \
+    && [ -n "$progress_text_value" ] \
+    && ! printf '%s' "$progress_text_value" | grep -qE '^[0-9]+%?$' \
+    && ! grep -qF -- '--percentage=' "$progress_invocation"; then
+    log_bool 'gui_same_usb_progress_indeterminate_not_percentage' 1
+else
+    log_bool 'gui_same_usb_progress_indeterminate_not_percentage' 0
 fi
 
 # ==============================================================================

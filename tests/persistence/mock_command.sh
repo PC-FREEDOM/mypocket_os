@@ -960,6 +960,10 @@ case "\$*" in
         ;;
     *--progress*)
         : > "$sandbox/work/progress-started"
+        # 実際の呼び出し引数をそのまま保存する (--pulsate・--progress-text
+        # 等、進捗表示が数値パーセンテージではなく不定進捗であることをテスト
+        # 側で検証するため)。
+        printf '%s\n' "\$*" >> "$sandbox/work/progress-invocation"
         # PR1では無限ループさせない。killはmock-kill (絶対パス経由の完全
         # モック) として提供済みだが、進捗ダイアログのモック自体は即座に
         # 終了する設計とし、バックグラウンドプロセスの残留を避ける。

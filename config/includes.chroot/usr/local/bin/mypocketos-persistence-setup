@@ -792,9 +792,15 @@ run_helper() {
     # するだけであり、GUI側で解析・表示することはしない (v1では固定文言の
     # pulsate表示のみを行う)。標準エラーは失敗時の補足表示にのみ用い、
     # いずれの内容もコマンドとして解釈・実行しない。
+    # --progress-textを明示的に指定する: 指定しない場合、yadはpulsate中も
+    # progress bar内部のラベルとして未更新の割合 (0%) をそのまま表示し
+    # 続け、実機で「0%のまま停止しているように見える」というUX上の問題に
+    # つながることを実機E2Eで確認した。実際の進捗率を取得・推測する手段は
+    # ないため、数値ではなく固定の処理中メッセージをbar内部にも表示する。
     yad --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
         --width=420 --text="永続領域を作成しています。しばらくお待ちください…" \
-        --progress --pulsate --no-buttons >/dev/null 2>&1 &
+        --progress --pulsate --progress-text="処理中…" --no-buttons \
+        >/dev/null 2>&1 &
     PROGRESS_PID=$!
 
     # 進捗ダイアログ起動後・helper起動直前にも再確認する (defense-in-depth)。
