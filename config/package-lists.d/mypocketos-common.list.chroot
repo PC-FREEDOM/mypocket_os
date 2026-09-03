@@ -73,3 +73,12 @@ yad
 # (今回はテストVMでの手動初期化用。将来のGUI永続領域作成機能の基盤)
 parted
 e2fsprogs
+
+# ---- 追加アプリ導入 (Flatpak) ----
+# ユーザーが後からアプリを追加する際の正式な方法として`flatpak --user`を
+# 推奨する。Flathub等のremoteはここでは登録しない(ユーザー自身が
+# `flatpak --user remote-add`で追加する想定)。GUIソフトウェアセンター
+# (gnome-software等)は含めない。`--user`でインストールしたアプリ・
+# ランタイム・remote設定・ユーザーデータ(~/.var/app/)はいずれも/home配下
+# に保存されるため、既存のPersistence(/home)でそのまま永続化される。
+flatpak

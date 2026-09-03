@@ -223,6 +223,7 @@ Baseとの差：
 | ネットワーク | NetworkManager | 実装済み |
 | 音声 | PipeWire／WirePlumber＋pasystray | 実装済み |
 | パッケージ管理 | APT／Synaptic | 実装済み |
+| 追加アプリ導入 | Flatpak（`flatpak --user`推奨） | 実装済み |
 
 ## 5.1 UI原則
 
@@ -806,6 +807,8 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - USB persistence IMG
 - 日本語環境
 - デスクトップ仕上げ
+- Flatpak標準搭載（`flatpak --user`を追加アプリ導入の推奨方式とする。
+  Flathub等remoteの自動登録は行わず、ユーザー自身が追加する）
 - 実機検証
 - リリース整備
 
@@ -813,7 +816,10 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - LUKS
 - Persistence領域管理
 - 選択式Persistence
-- 追加アプリ再導入
+- APTパッケージ本体の永続化・再導入を含む、より高度な追加アプリ管理機能
+  （Flatpak `--user`によるアプリ導入はPhase 1で実装済み。ここでの
+  「再導入」は、APTで追加したパッケージ本体の永続化・システム全体への
+  インストールなど、Phase 1のFlatpak方式では扱わない範囲を指す）
 
 ## Phase 3
 - Calamares

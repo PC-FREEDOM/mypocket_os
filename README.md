@@ -140,6 +140,24 @@ Base版の構成に加えて、Standard版では次のアプリを追加しま�
 GIMP・Inkscape・動画編集・音楽制作・Blenderは、今回のStandard版には
 含めていません。将来のCreator系構成の候補です。
 
+### ユーザーによる追加アプリ導入 (Flatpak)
+
+Base版・Standard版のいずれにも`flatpak`コマンドを標準搭載しています
+(`config/package-lists.d/mypocketos-common.list.chroot`)。あらかじめ用意
+した以外のアプリをユーザーが後から追加したい場合は、`flatpak --user`での
+導入を正式な方法として推奨します。
+
+- Flathub等のremoteは、MyPocketOS側では自動登録していません。必要な場合は
+  ユーザー自身で`flatpak --user remote-add`を実行してください(例:
+  `flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`)。
+- gnome-software等のGUIソフトウェアセンターは含めていません。
+- `flatpak --user`でインストールしたアプリ・ランタイム・remote設定・
+  ユーザーデータ(`~/.var/app/`)は、いずれも`/home`配下に保存されるため、
+  既存のPersistence(`/home`)機能でそのまま永続化されます(実機確認手順は
+  今後別途実施予定)。
+- APTで追加したパッケージ本体そのものの永続化は、初回版では対象外です
+  (Live起動のたびにリセットされます)。
+
 **実測ISOサイズ**
 
 `./scripts/build.sh base` / `./scripts/build.sh standard` でそれぞれ実際に
@@ -153,6 +171,11 @@ GIMP・Inkscape・動画編集・音楽制作・Blenderは、今回のStandard�
 差は約343 MiB (359,399,424 bytes、StandardはBaseより約25.15%大きく、
 BaseはStandardより約20.10%小さい) です。ISOのSHA-256はビルドごとに
 変わる (タイムスタンプ等を含むため) ため、ここには記載しません。
+
+**注**: 上記はFlatpak標準搭載 (前述「ユーザーによる追加アプリ導入
+(Flatpak)」節参照) 追加前の実測値であり、現在は`flatpak`本体および
+その依存パッケージ (bubblewrap・xdg-desktop-portal等) の分だけ実際の
+ISOサイズが増加しています。再測定は今後別途実施予定です。
 
 ### アイコンテーマ (MyPocketOS-Fluent-yellow)
 
