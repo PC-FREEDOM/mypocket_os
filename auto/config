@@ -11,4 +11,8 @@ lb config noauto \
     --archive-areas "main contrib non-free-firmware" \
     --binary-images iso-hybrid \
     --bootappend-live "boot=live components noeject locales=ja_JP.UTF-8 keyboard-layouts=jp timezone=Asia/Tokyo hostname=mypocketos" \
+    --iso-volume "MyPocketOS @ISOVOLUME_TS@" \
+    --iso-application "MyPocketOS" \
+    --iso-publisher "MyPocketOS project" \
+    --hdd-label "MYPOCKETOS" \
     "${@}"

@@ -29,6 +29,13 @@ sh "${TESTS_DIR}/test_package_lists.sh" && pl_rc=0 || pl_rc=$?
 
 echo
 echo "############################################"
+echo "# test_media_label.sh (auto/config ISO/USBメディア名 静的確認)"
+echo "############################################"
+sh "${TESTS_DIR}/test_media_label.sh" && media_label_rc=0 || media_label_rc=$?
+[ "${media_label_rc}" -eq 0 ] || overall_rc=1
+
+echo
+echo "############################################"
 echo "# test_build.sh (scripts/build.sh モックテスト)"
 echo "############################################"
 sh "${TESTS_DIR}/test_build.sh" && build_rc=0 || build_rc=$?
@@ -75,5 +82,5 @@ else
 fi
 
 echo
-echo "package_lists=${pl_rc} build=${build_rc} update_iso=${update_rc} create_vm=${create_vm_rc} overall=${overall_rc}"
+echo "package_lists=${pl_rc} media_label=${media_label_rc} build=${build_rc} update_iso=${update_rc} create_vm=${create_vm_rc} overall=${overall_rc}"
 exit "${overall_rc}"
