@@ -23,6 +23,7 @@ tests/desktop-polish/test_boot_mode.sh
 tests/desktop-polish/test_menu.sh
 tests/desktop-polish/test_icon_theme.sh
 tests/desktop-polish/test_fluent_archive.sh
+tests/desktop-polish/test_battery.sh
 ```
 
 ## 内容
@@ -54,6 +55,18 @@ tests/desktop-polish/test_fluent_archive.sh
   別途存在してよい)・旧トップディレクトリ`Fluent-yellow/`・固定サイズ
   /HiDPIディレクトリ・`icon-theme.cache`が含まれないことを確認する。
   実展開・実sudo・実chroot操作は一切行わない。
+- `test_battery.sh`: パネルのバッテリー残量%表示(tint2標準Battery機能)を
+  確認する。`panel_items`に既存のP/T/S/Cを維持したまま`B`が1つだけ
+  追加されていること、`bat1_format = %p`(残量%のみ)・`bat2_format`が
+  空(2行表示にしない)であること、`battery_hide = never`・
+  `battery_tooltip_enabled = 1`等の設定値、`battery_font_color`・
+  `battery_padding`・`battery_background_id`が既存`clock_*`と統一されて
+  いること、グラフィカルなアイコン(MyPocketOSテーマへの`battery`関連
+  SVG追加)を採用していないこと、upower/acpi/cbatticon等の外部
+  パッケージ・常駐daemonを追加していないことを静的に確認する。tint2は
+  `/sys/class/power_supply`を直接読み取り、バッテリー非搭載機では
+  tint2自身がBattery項目を自動非表示にする設計のため、実バッテリーの
+  有無に依存する動作そのものは実機/VM側での確認が必要(本テストの対象外)。
 
 ## production整合性への影響
 
