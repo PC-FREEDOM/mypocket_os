@@ -14,6 +14,7 @@ tests/edition-build/run.sh
 
 ```sh
 tests/edition-build/test_package_lists.sh
+tests/edition-build/test_media_label.sh
 tests/edition-build/test_build.sh
 tests/edition-build/test_update_iso.sh
 tests/edition-build/test_create_vm.sh
@@ -25,6 +26,19 @@ tests/edition-build/test_create_vm.sh
   (commonにStandard専用アプリが含まれないこと、standardに現在の12
   パッケージが揃っていること、`config/package-lists/`直下に恒久ファイルが
   残っていないこと)。
+- `test_media_label.sh`: `auto/config`の`--iso-volume`・`--iso-application`・
+  `--iso-publisher`・`--hdd-label`(ISO/USBメディア名としてOSやファイル
+  マネージャーに表示される値)を静的に確認する。4設定がいずれも存在し、
+  値に`Debian`を含まず`MyPocketOS`系の表記になっていること、
+  `--iso-volume`の`@ISOVOLUME_TS@`展開後の文字数がISO9660の32文字制限に
+  収まること、`--iso-preparer`は今回の変更対象外のため未設定のままである
+  ことを検証する。`config/binary`・`config/common`・`config/chroot`・
+  `config/bootstrap`は`lb config`が生成する成果物であり`.gitignore`対象の
+  ためリポジトリには存在しない(誤って追跡対象に戻っていないことも確認
+  する)。ローカル環境で`lb config`実行済みで`config/binary`が存在する
+  場合に限り、そこに書き出された`LB_ISO_VOLUME`等の値が`auto/config`の
+  設定値と一致するかも追加確認するが、CI等`config/binary`が存在しない
+  環境ではこの追加確認をスキップする(既存方針どおり実`lb`は呼び出さない)。
 - `test_build.sh`: `scripts/build.sh`をsandbox (mktemp -d) へコピーし、
   モック`lb`/`sudo`で引数検証・package-list一時配置内容・`--image-name`・
   cleanup (成功時/1回目`lb config`失敗時/`lb clean`失敗時/2回目
