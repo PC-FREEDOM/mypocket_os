@@ -77,12 +77,29 @@ for icon in muted low medium high; do
 done
 
 # muted/low/medium/highが形状で区別できること (色だけに依存しない設計の
-# 最低限の確認)。muted は斜線 (2点のみのstroke path)、low/medium/high は
-# 音波の弧の本数が1/2/3本であることを、円弧を表す "Q" (quadratic bezier)
-# コマンドの出現回数で確認する
+# 最低限の確認)。muted は交差する直線2本による「×」印(stroke path 2本)、
+# low/medium/high は音波の弧の本数が1/2/3本であることを、円弧を表す "Q"
+# (quadratic bezier) コマンドの出現回数で確認する
 MUTED_SVG="${VOL_DIR_NONSYMBOLIC}/audio-volume-muted.svg"
 check "muted icon has no wave arcs (Q commands)" \
 	sh -c '[ "$(grep -o "Q" "$1" | wc -l)" -eq 0 ]' _ "${MUTED_SVG}"
+# 「×」を構成する2本の交差線が、スピーカー形状(fill付きpath)とは別の
+# 独立したstroke path(fill="none")として2本存在することを確認する
+# (low/medium/highの音波弧と同じ「stroke pathの本数」という設計で揃える)。
+check "muted icon has exactly 2 stroke paths (the two crossing lines of the X mark)" \
+	sh -c '[ "$(grep -c "fill=\"none\" stroke=" "$1")" -eq 2 ]' _ "${MUTED_SVG}"
+# その2本が直線(L コマンド)で描かれ、弧(Q)ではないことを確認する
+check "muted icon's 2 stroke paths are straight lines (L commands, not arcs)" \
+	sh -c '[ "$(grep -A1 "fill=\"none\" stroke=" "$1" | grep -c "d=\"M[0-9.]*,[0-9.]* L[0-9.]*,[0-9.]*\"")" -eq 2 ]' _ "${MUTED_SVG}"
+# 2本の線が実際に交差する(× の形になる)ことを確認する。スピーカー形状
+# (fill付きpath)を除いた2本のstroke path(直線)それぞれの始点x座標が
+# 異なる(一方は左上→右下、もう一方は右上→左下)ことを確認する
+check "muted icon's 2 lines cross (start x-coordinates differ, forming an X not parallel lines)" \
+	sh -c '
+		starts="$(grep -A1 "fill=\"none\" stroke=" "$1" | grep -oE "d=\"M[0-9.]+,[0-9.]+" | sed -E "s/.*M([0-9.]+),.*/\1/")"
+		set -- $starts
+		[ "$#" -eq 2 ] && [ "$1" != "$2" ]
+	' _ "${MUTED_SVG}"
 LOW_SVG="${VOL_DIR_NONSYMBOLIC}/audio-volume-low.svg"
 check "low icon has exactly 1 wave arc" \
 	sh -c '[ "$(grep -o "Q" "$1" | wc -l)" -eq 1 ]' _ "${LOW_SVG}"

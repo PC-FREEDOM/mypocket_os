@@ -3,5 +3,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <path fill="#f2f2f2" d="M10,5 L6,9 L2,9 L2,15 L6,15 L10,19 Z"/>
   <path fill="none" stroke="#f2f2f2" stroke-width="2.4" stroke-linecap="round"
-        d="M3,3 L21,21"/>
+        d="M12,5 L22,19"/>
+  <path fill="none" stroke="#f2f2f2" stroke-width="2.4" stroke-linecap="round"
+        d="M22,5 L12,19"/>
 </svg>
