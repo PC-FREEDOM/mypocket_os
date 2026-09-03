@@ -1900,17 +1900,27 @@ finalize_persistence_filesystem() {
 
     stage 'conf'
     CONF_PATH="$MNT_DIR/persistence.conf"
-    if ! printf '/home\n' > "$CONF_PATH"; then
+    # live-bootのpersistence.conf標準構文に従い、オプションなし (デフォルト
+    # bindマウント) の2行で、/home (ユーザーデータ) と
+    # /etc/NetworkManager/system-connections (Wi-Fi等の接続プロファイル) を
+    # 独立したcustom mountとして永続化する。union/link等の他オプションは
+    # 使用しない。
+    CONF_EXPECTED_CONTENT='/home
+/etc/NetworkManager/system-connections'
+    if ! printf '%s\n' "$CONF_EXPECTED_CONTENT" > "$CONF_PATH"; then
         fail 24 "persistence.confの書き込みに失敗しました: $CONF_PATH"
     fi
 
-    # 書き込んだ内容を機械的に検証する ("/home" + 改行1つ = 6バイトちょうど)。
+    # 書き込んだ内容を機械的に検証する。期待バイト数は決め打ちにせず、
+    # 実際に書き込む内容 (CONF_EXPECTED_CONTENT) の文字数+末尾改行1個から
+    # その場で算出する (2026-09-01時点でこの内容は45バイトになる)。
+    conf_expected_size=$((${#CONF_EXPECTED_CONTENT} + 1))
     conf_size="$("$CMD_STAT" -c '%s' -- "$CONF_PATH" 2>/dev/null)" || conf_size=''
-    if [ "$conf_size" != '6' ]; then
-        fail 24 "persistence.confの内容確認に失敗しました (サイズ: ${conf_size:-取得不可} バイト): $CONF_PATH"
+    if [ "$conf_size" != "$conf_expected_size" ]; then
+        fail 24 "persistence.confの内容確認に失敗しました (サイズ: ${conf_size:-取得不可} バイト、期待値: ${conf_expected_size}バイト): $CONF_PATH"
     fi
     conf_content="$("$CMD_CAT" -- "$CONF_PATH" 2>/dev/null)" || conf_content=''
-    if [ "$conf_content" != '/home' ]; then
+    if [ "$conf_content" != "$CONF_EXPECTED_CONTENT" ]; then
         fail 24 "persistence.confの内容確認に失敗しました (内容不一致): $CONF_PATH"
     fi
     check_signal

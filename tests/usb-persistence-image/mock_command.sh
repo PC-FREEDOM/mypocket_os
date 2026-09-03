@@ -421,9 +421,12 @@ Inode: 13   Type: regular    Mode:  0644   Flags: 0x80000
 User:  1000   Group:  1000   Project:     0   Size: 6
 STATEOF
         else
+            # Size 45 = "/home\n/etc/NetworkManager/system-connections\n" の
+            # 実バイト数 (build-usb-persistence-image.shのCONF_EXPECTED_CONTENT
+            # と一致させること)。
             cat <<'STATEOF'
 Inode: 13   Type: regular    Mode:  0600   Flags: 0x80000
-User:     0   Group:     0   Project:     0   Size: 6
+User:     0   Group:     0   Project:     0   Size: 45
 STATEOF
         fi
         exit 0
@@ -441,7 +444,7 @@ STATEOF
         if [ "$bad" = '1' ]; then
             printf 'wrong-content'
         else
-            printf '/home'
+            printf '/home\n/etc/NetworkManager/system-connections'
         fi
         exit 0
         ;;

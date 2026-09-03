@@ -411,16 +411,22 @@ BIOS版は `mypocketos-test`、UEFI版は `mypocketos-uefi-test` という名前
   `MyPocketOS Live (Fail-safe)` の3ラベル。UEFI/GRUB も同名の3項目)。
 - 通常Liveには `nopersistence`、永続Liveには `persistence` の起動
   パラメータが付きます。
-- 現段階で永続化の対象となるのは `/home` のみです。
+- 現段階で永続化の対象となるのは `/home` と
+  `/etc/NetworkManager/system-connections` (Wi-Fi等の接続プロファイル) の
+  2箇所です。
 - 永続化には、ext4でフォーマットしラベルを `persistence` にした
   パーティションと、そのルートに置く `persistence.conf` (中身は
-  `/home` の1行だけ) が必要です。
-- 暗号化 (LUKS等) は未実装です。
+  `/home` と `/etc/NetworkManager/system-connections` の2行、いずれも
+  live-boot標準のオプションなしデフォルトbindマウント) が必要です。
+- 暗号化 (LUKS等) は未実装です。Wi-Fi接続の認証情報 (PSK等) も含めて、
+  Persistence領域は無暗号化のまま保存されます。Persistence USBの紛失・
+  盗難時にはこれらの認証情報も読み取られ得る点に注意してください。
 - GUIによるパーティション作成は実装済みであり、2026-08-26に専用の
   BIOS版・UEFI版の双方の使い捨てテストVMで、GUIから実際に新規
   persistence領域を作成できることを確認済みです (詳細は「GUIによる
   永続領域作成 (実装仕様)」節の「動作確認」を参照)。
-- `/home` 配下の一般アプリ設定・ユーザーデータは保存対象です。
+- `/home` 配下の一般アプリ設定・ユーザーデータ、および
+  NetworkManagerのWi-Fi接続プロファイルは保存対象です。
 - 追加インストールしたアプリ本体、パッケージ一覧、APTキャッシュの永続化は
   未実装です。
 
@@ -428,8 +434,9 @@ BIOS版は `mypocketos-test`、UEFI版は `mypocketos-uefi-test` という名前
 
 - `/` unionはシステム全体の変更を保存する方式であり、カーネルやLive基盤を
   ISO更新によって提供するという方針と衝突します。
-- 今回はユーザーデータとホームディレクトリ配下の設定だけを永続化の対象と
-  します。
+- 今回はユーザーデータとホームディレクトリ配下の設定、およびWi-Fi接続
+  設定 (`/etc/NetworkManager/system-connections`) といった限定された
+  パスだけを永続化の対象とします。
 - 一般アプリの永続化は、将来的にパッケージ一覧とAPTキャッシュを使う
   別機能として実装する予定です。
 
@@ -479,12 +486,13 @@ BIOS版は `mypocketos-test`、UEFI版は `mypocketos-uefi-test` という名前
    sudo mount /dev/vda1 /mnt/persistence
    ```
 
-5. `persistence.conf` を作成する (中身は `/home` の1行のみ)。シェルの
+5. `persistence.conf` を作成する (中身は `/home` と
+   `/etc/NetworkManager/system-connections` の2行)。シェルの
    リダイレクトでは書き込み権限の問題が起きうるため、`tee` を使う。
    作成後は内容を確認する。
 
    ```sh
-   printf '/home\n' | sudo tee /mnt/persistence/persistence.conf >/dev/null
+   printf '/home\n/etc/NetworkManager/system-connections\n' | sudo tee /mnt/persistence/persistence.conf >/dev/null
    cat /mnt/persistence/persistence.conf
    ```
 
@@ -946,7 +954,8 @@ GUI起動からヘルパー実行までの間に状態が変化している可�
    `parted mklabel gpt` → `mkpart persistence ext4 1MiB 100%` →
    `partprobe` → `udevadm settle` → (作成したパーティションの特定) →
    `mkfs.ext4 -L persistence` → 一時マウント →
-   `persistence.conf`書き込み (`/home`の1行) → `sync` → アンマウント。
+   `persistence.conf`書き込み (`/home`と`/etc/NetworkManager/system-connections`
+   の2行) → `sync` → アンマウント。
    各コマンドの終了コードを確認し、失敗した時点で以降の手順を中断する。
 5. **`parted`によるヘルパーの処理が開始された後は、GUIから処理を
    キャンセルしない。** 進捗ダイアログのウィンドウを閉じても、GUIは
@@ -976,7 +985,8 @@ jgmenuの`append.csv`が、tint2パネルの常駐jgmenuとデスクトップ背
 - 既存永続領域の上書き・削除・サイズ変更・再フォーマット。
 - 複数の永続領域の作成・切り替え。
 - LUKSによる暗号化。
-- `/home`以外 (`/`全体等) の永続化。
+- `/home`と`/etc/NetworkManager/system-connections`以外 (`/`全体等) の
+  永続化。
 - 追加インストールしたアプリ本体・パッケージ一覧・APTキャッシュの永続化。
 
 #### 動作確認
@@ -1141,13 +1151,53 @@ TPMは接続なし) を用意して使用した。いずれのVMにも次のみ�
   インストールしたアプリ本体の永続化 (いずれも「初版のスコープ外」節
   参照)。
 
+#### Mode B Wi-Fi Persistence 実機E2E検証 (2026-09-02)
+
+feature branch `feat/persistence-wifi-networkmanager` (commit
+`38fc0fe1b884102c9c487abaa9c1652329f750ab`) のBase版ISOを実機のUSBメモリへ
+書き込み、Mode B (同一起動USBの末尾未使用領域) でPersistence領域を作成した
+うえで、Wi-Fi Persistenceの実機E2Eを実施した。
+
+- 通常Liveから「永続領域を作成」を実行し、候補一覧の「MyPocketOS 起動USB」
+  を選択、ERASE警告やtype-to-confirmが表示されないこと (Mode Bであること)
+  を確認したうえで、永続領域の作成に成功した。
+- Persistenceモードで再起動後、`findmnt`により`/home`・
+  `/etc/NetworkManager/system-connections`の両方が、同一の`persistence`
+  ラベルのext4パーティションからマウントされていることを確認した。
+- GUI (nm-applet) からWi-Fiへ接続し、`/etc/NetworkManager/system-connections/`
+  配下に接続プロファイル (`<SSID>.nmconnection`) が所有者`root:root`・
+  パーミッション`600`で作成されることを確認した。
+- 再起動しPersistenceモードで再度起動したところ、パスワード再入力なしで
+  同じWi-Fiへ自動接続すること、接続プロファイルの所有者・パーミッションが
+  維持されていることを確認した。
+- `/home`側のテストファイルも、再起動後に保持されていることを確認した
+  (既存の`/home` Persistenceへの回帰がないことの確認を兼ねる)。
+- 通常Live (`nopersistence`) で起動すると、Wi-Fi接続・接続プロファイル・
+  `/home`のテストファイルのいずれも見えないことを確認した。
+
+**この検証で確認していない事項**
+
+- 使用した実機のブート方式 (Legacy BIOS / UEFI) は記録されておらず未確認。
+- Mode A (別ディスク全体) でのWi-Fi Persistence実機/VM確認。
+- USB persistence IMG (`build-usb-persistence-image.sh`) 経由でのWi-Fi
+  Persistence実機/VM確認。
+- UEFI環境・Secure Boot環境でのWi-Fi Persistence確認。
+- 複数のWi-Fiプロファイルを記憶させた場合の挙動。
+
+検証中に、今回の検証対象とは別のUSBメモリでのI/Oエラー、および別の
+USBメモリでの書き込み後起動失敗が確認されたが、いずれも本機能のコードとは
+無関係なUSBハードウェア側の問題として切り分けており、上記の結果に影響
+していない。
+
 ## USB persistence IMG生成 (試作)
 
 `scripts/build-usb-persistence-image.sh` は、通常のedition別ISO
 (`mypocketos-base-amd64.hybrid.iso` / `mypocketos-standard-amd64.hybrid.iso`)
 とは**別成果物**として、単一のGPT/MBR/APM/El Toritoハイブリッド構造に
 persistence用の第3パーティション (ext4, LABEL=`persistence`,
-`persistence.conf`の内容は`/home`) をあらかじめ追加したIMGファイルを、
+`persistence.conf`の内容は`/home`と
+`/etc/NetworkManager/system-connections`の2行) をあらかじめ追加した
+IMGファイルを、
 単一のxorriso生成処理で作る試作スクリプトである。「Live永続化基盤」
 「GUIによる永続領域作成」節が前提とする、Live起動中にGUI/helperで
 外部の別ディスクへ永続領域を作成する経路とは別に、**1本のUSBメモリだけで
