@@ -336,6 +336,38 @@ QEMU/KVM上のVMで手軽に確認するためのものであり、MyPocketOS自
 前提として、`qemu:///system` が使えること (libvirtの `default` ネットワークが
 active であること)、および `sudo` が使えることが必要です。
 
+### 正式なVM運用構成
+
+MyPocketOSの開発では、以下の2台を恒久的なVMとして維持します。
+Persistence専用・USB persistence IMG検証専用といった追加の恒久VMは
+作らない方針です (詳細は後述)。
+
+| VM名 | 役割 |
+|---|---|
+| `mypocketos-test` | BIOS/Legacy確認用。日常的なLive起動・UI・Persistence確認に使用する |
+| `mypocketos-uefi-test` | UEFI/Secure Boot系確認用 |
+
+**ISO更新時の方針**: ISOを再ビルドするたびにVMを作り直す必要はありません。
+両VMは`MyPocketOS-dev.iso`を共有しており、ISO再ビルド後は
+`scripts/update-test-iso.sh`で共有ISOのみを更新します (手順は後述の
+「ISO再ビルド後の更新手順」節を参照)。
+
+**Persistence VMの方針**: Persistence専用の恒久3台目VMは作りません。
+Mode A等の確認が必要な場合は、`mypocketos-test`に接続済みの
+`mypocketos-test-persistence-scratch.qcow2`を必要に応じて利用します。
+
+**USB persistence IMG等の特殊検証の方針**: このような検証のためだけに
+恒久VMを増やすことはしません。必要なときだけ一時的な検証VMを作成し、
+検証結果を本READMEや仕様書へ記録したら、不要になったVM・専用ディスクは
+整理します (整理手順は後述の「VMの削除について」節を参照)。
+
+**2026-09-04の整理結果**: 過去の個別検証で作成し役目を終えていたVM7台
+(GUI永続化領域作成検証・試作USB persistence IMG検証・Standard版USB
+persistence IMG検証それぞれのBIOS/UEFI版、および用途未確認の1台) を
+整理し、古いraw IMG・一時ファイルもあわせて整理しました。この結果、
+恒久VMは現在上記の2台のみとなり、開発ホストの空き容量は約14GiBから
+約29GiBへ回復しました。
+
 ### 初回作成
 
 `create-test-vm.sh`・`update-test-iso.sh`とも、editionの指定 (`base` または
@@ -430,10 +462,23 @@ BIOS版は `mypocketos-test`、UEFI版は `mypocketos-uefi-test` という名前
 ### VMの削除について
 
 これらのスクリプトは、VM・仮想ディスク・ISOを削除する機能を意図的に
-実装していません。不要になった場合は、virt-managerで対象のVM名が
-`mypocketos-test` または `mypocketos-uefi-test` であることを確認したうえで、
-手動で管理してください (誤削除防止のため、本READMEでは削除コマンドは
-案内しません)。
+実装していません (削除の一括自動化はscriptsへ追加しない方針です)。
+
+現在、恒久的に維持し削除しないものは次のとおりです。
+
+- `MyPocketOS-dev.iso` (BIOS版・UEFI版共有のCD-ROM)
+- `mypocketos-test.qcow2`
+- `mypocketos-test-persistence-scratch.qcow2`
+- `mypocketos-uefi-test.qcow2`
+
+「USB persistence IMG等の特殊検証の方針」節のとおり一時的に作成した
+検証用VM・専用ディスクが不要になった場合は、virt-manager等で対象VM名を
+目視確認したうえで、VM定義の削除 (`virsh undefine`) と仮想ディスクの
+削除 (`virsh vol-delete`) を分けて手動で行ってください。
+`virsh undefine --remove-all-storage` のような一括削除コマンドは、
+共有ISO (`MyPocketOS-dev.iso`) を巻き込んで削除してしまう危険があるため
+推奨しません。誤削除防止のため、本READMEでは具体的な削除コマンド例は
+案内しません。
 
 ## Live永続化基盤
 
