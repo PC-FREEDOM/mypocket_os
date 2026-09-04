@@ -84,13 +84,21 @@ live-buildの正規オプション。旧来の`live-image-amd64.hybrid.iso`と�
   `CanRebootToFirmwareSetup()` (D-Bus) で都度判定し、非対応と判定された
   場合は再起動を行わず、日本語のGUIメッセージで理由を表示します。
 
-以下は未実装です (今後の課題)。
+以下は、上記の初回構成時点では未実装でした。その後の実装状況は
+以下のとおりです (最新の詳細は本README内の該当節、または
+`mypocketos-specification-2026-08-31.md`を参照)。
 
-- 永続化 (persistence)
-- Calamaresによるインストーラ
-- 一般アプリ一式
-- 独自テーマ・ブランディング
-- 外部リポジトリからテーマ等を取得するフック
+- 永続化 (persistence): 実装済み。「Live永続化基盤」節を参照
+- Calamaresによるインストーラ: 未実装のまま (Phase 3、仕様書18節参照)
+- 一般アプリ一式: Standard版の追加アプリ (「Standard版の追加アプリ」節)、
+  および`flatpak --user`によるユーザー追加アプリ (「ユーザーによる追加
+  アプリ導入 (Flatpak)」節) で対応済み
+- 独自テーマ・ブランディング: 実装済み。「アイコンテーマ
+  (MyPocketOS-Fluent-yellow)」節、およびISO/USBメディア名のMyPocketOS化
+  (`auto/config`の`--iso-volume`等) を参照
+- 外部リポジトリからテーマ等を取得するフック: 未実装のまま (アイコン
+  テーマはオフライン同梱のtar.gzアーカイブ+検証hookで展開する設計を
+  採用しており、外部リポジトリからの取得は意図的に行っていません)
 
 ### 既知の制限
 
