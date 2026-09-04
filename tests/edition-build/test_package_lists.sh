@@ -56,5 +56,35 @@ for pkg in openbox tint2 lightdm pcmanfm jgmenu conky-std pasystray yad; do
 	check "common list contains: ${pkg}" grep -qx "${pkg}" "${COMMON_LIST}"
 done
 
+# ---- Flatpakがcommon (Base/Standard共通) に含まれること -----------------------
+# 追加アプリ導入の正式な方法として`flatpak --user`をBase/Standard両方で
+# 使えるようにするため、Standard専用ではなくcommonへ追加する。
+check "common list contains: flatpak" grep -qx 'flatpak' "${COMMON_LIST}"
+check "flatpak is listed exactly once in common list" \
+	sh -c '[ "$(grep -cx "flatpak" "$1")" -eq 1 ]' _ "${COMMON_LIST}"
+check "flatpak is not duplicated into standard list" \
+	sh -c '! grep -qx "flatpak" "$1"' _ "${STANDARD_LIST}"
+
+# ---- 不要なFlatpak関連GUIフロントエンド・ソフトウェアセンターを追加していないこと ----
+# gnome-software等のGUIストアや、flatpak以外のパッケージ管理GUIフロント
+# エンドは今回追加しない方針のため、common/standard双方に存在しないことを
+# 確認する。
+for pkg in gnome-software gnome-software-plugin-flatpak plasma-discover \
+	flatpak-builder software-properties-gtk synaptic; do
+	check "no GUI software-center frontend added to common: ${pkg}" \
+		sh -c '! grep -qx "$1" "$2"' _ "${pkg}" "${COMMON_LIST}"
+	check "no GUI software-center frontend added to standard: ${pkg}" \
+		sh -c '! grep -qx "$1" "$2"' _ "${pkg}" "${STANDARD_LIST}"
+done
+
+# ---- Flathub等のremoteをシステムワイドに自動登録していないこと --------------
+# 既存設計の確認結果、自動登録の要否は独断で決めない方針のため、今回は
+# flatpakパッケージ本体の追加のみとし、remote登録を行うhook・
+# includes.chrootファイルを追加していないことを確認する。
+check "no flatpakrepo file added under config/includes.chroot" \
+	sh -c '! find "$1/config/includes.chroot" -iname "*.flatpakrepo" 2>/dev/null | grep -q .' _ "${REPO_ROOT}"
+check "no hook performs flatpak remote-add (system-wide auto-registration)" \
+	sh -c '! grep -rl "remote-add" "$1/config/hooks" 2>/dev/null | grep -q .' _ "${REPO_ROOT}"
+
 echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"
 [ "${FAIL}" -eq 0 ]
