@@ -222,7 +222,7 @@ Baseとの差：
 | ログイン | LightDM | 実装済み |
 | ネットワーク | NetworkManager | 実装済み |
 | 音声 | PipeWire／WirePlumber＋pasystray | 実装済み |
-| パッケージ管理 | APT／Synaptic | 実装済み |
+| パッケージ管理 | APT（CLI。Synaptic等GUIフロントエンドは未搭載） | 実装済み |
 | 追加アプリ導入 | Flatpak（`flatpak --user`推奨） | 実装済み |
 
 ## 5.1 UI原則
@@ -235,20 +235,19 @@ Baseとの差：
 
 ## 5.2 初回公開前の追加UX候補
 
+消音アイコンの「スピーカー＋×」化（PR #31）・tint2電源管理／バッテリー％
+表示（PR #32）・最初に表示される画面のDebian表記のMyPocketOS化（PR #30、
+7.3節参照）は、いずれも実装済みのためこの候補一覧から除外した。
+
 ### 優先度高
 - Openboxのウィンドウスナップ
   - `Super + Left`：左半分
   - `Super + Right`：右半分
   - `Super + Up`：最大化
   - `Super + Down`：最大化解除
-- 消音時アイコンを「スピーカー＋×」として明確に判別できるデザインへ変更
-- tint2へ電源管理／バッテリー表示を追加し、可能なら残量を％表示
 
 ### 優先度中
 - Persistence領域が存在する場合、起動メニューでPersistenceを既定選択にできるか検討
-
-### 優先度低
-- 最初に表示されるブート画面のDebian表記をMyPocketOSへ変更
 
 ---
 
@@ -292,7 +291,8 @@ GTK2/GTK3双方で`MyPocketOS`を既定アイコンテーマとする。
 
 非symbolic名を要求するpasystrayへ対応済み。
 
-追加仕上げ候補として、`audio-volume-muted`は「スピーカー＋×」表現へ変更する。
+`audio-volume-muted`は、スピーカー形状＋交差する2本の直線による「×」表現へ
+変更済み（PR #31）。
 
 ---
 
@@ -316,15 +316,20 @@ Normal LiveとPersistenceは明示的に分離する。
 
 `/proc/cmdline`を完全一致トークンで判定し、曖昧・重複・不明は`Unknown`へ倒す。
 
-## 7.3 ブランド表示の残課題
+## 7.3 ブランド表示の残課題(対応済み)
 
-現状、USBへ書き込んだISO9660のVolume IDが`Debian trixie ...`のままであることを実機確認している。
+PR #30（`auto/config`の`--iso-volume`／`--iso-application`／
+`--iso-publisher`／`--hdd-label`をMyPocketOS表記へ変更）で対応済み。
+実際にビルドしたISOファイルのPrimary Volume Descriptorで
+`Volume Id: MyPocketOS ...`となることを実機確認済み（詳細はPR #30本文・
+README.mdの該当節を参照）。
 
-初回公開前の改善候補：
-- ISO/USB Volume IDをMyPocketOS表記へ変更
-- 起動直後の最初のブート画面に残るDebian表記をMyPocketOS表記へ変更
-
-Volume IDの変更は優先度高、最初のブート画面は優先度低とする。
+- ✅ ISO/USB Volume IDをMyPocketOS表記へ変更
+- ✅ 起動直後の最初のブート画面に残るDebian表記をMyPocketOS表記へ変更
+  （PR #30調査時点で、ブートローダーメニュー(GRUB/Syslinux)は既に
+  `MyPocketOS Live`表記であることを確認済みであり、Debian表記が残って
+  いた唯一の箇所はISO Volume ID（BIOS/UEFIの起動デバイス選択画面等で
+  表示され得る）だったため、上記の対応で解消したと判断する）
 
 ---
 
@@ -735,12 +740,12 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 
 ## 16.1 実装・仕上げ候補
 
+ミュートアイコン（PR #31）・tint2電源管理／バッテリー％表示（PR #32）・
+ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30、
+7.3節参照）は、いずれも実装済みのためこの候補一覧から除外した。
+
 1. Openbox `Super + 矢印` ウィンドウスナップ
-2. ミュートアイコンを「スピーカー＋×」へ
-3. tint2へ電源管理／バッテリー％表示
-4. ISO/USB Volume IDをMyPocketOSへ
-5. Persistence存在時の起動既定選択を検討
-6. 最初のブート画面のDebian表記をMyPocketOSへ
+2. Persistence存在時の起動既定選択を検討
 
 原則1機能1feature branch。
 
