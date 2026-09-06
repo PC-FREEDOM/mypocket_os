@@ -1280,10 +1280,16 @@ feature branch `feat/persistence-wifi-networkmanager` (commit
 
 - 使用した実機のブート方式 (Legacy BIOS / UEFI) は記録されておらず未確認。
 - Mode A (別ディスク全体) でのWi-Fi Persistence実機/VM確認。
-- USB persistence IMG (`build-usb-persistence-image.sh`) 経由でのWi-Fi
-  Persistence実機/VM確認。
 - UEFI環境・Secure Boot環境でのWi-Fi Persistence確認。
 - 複数のWi-Fiプロファイルを記憶させた場合の挙動。
+
+**注記(2026-09-06追記)**: 「USB persistence IMG
+(`build-usb-persistence-image.sh`) 経由でのWi-Fi Persistence実機確認」は、
+2026-09-06に実施済みである(後述「USB persistence IMG経由の実Wi-Fi接続
+E2E検証 (2026-09-06)」節を参照)。ただし、その検証時の実機起動方式
+(BIOS/UEFI) も記録されておらず不明のままであり、Mode A・UEFI環境・
+Secure Boot環境・複数Wi-Fiプロファイルでの確認は、USB persistence IMG
+経由も含めて引き続き未確認のまま残っている。
 
 検証中に、今回の検証対象とは別のUSBメモリでのI/Oエラー、および別の
 USBメモリでの書き込み後起動失敗が確認されたが、いずれも本機能のコードとは
@@ -1638,11 +1644,53 @@ Persistence → 再起動 → Normal Live → 再Persistenceという一連の�
 
 - 今回の起動が実機のBIOS/UEFIいずれのファームウェアモードによるものかは
   記録されておらず不明(推測で記載しない)。
-- NetworkManager設定パスがPersistence領域からマウントされることは確認
-  したが、実際のWi-Fi SSID/パスワードの登録・再起動後の自動再接続までは
-  未確認のまま。
 - 実機でのSecure Boot確認、および未署名バイナリ拒否によるSecure Boot
   enforcementの実証(いずれも本検証の対象外)。
+
+**注記(2026-09-06追記)**: NetworkManager設定パスがPersistence領域から
+マウントされることを確認した上記の結果を踏まえ、同日別途、実際のWi-Fi
+SSID/パスワードの登録から再起動後の自動再接続までを実機E2Eで確認した
+(下記「USB persistence IMG経由の実Wi-Fi接続E2E検証 (2026-09-06)」節を
+参照)。
+
+### USB persistence IMG経由の実Wi-Fi接続E2E検証 (2026-09-06)
+
+上記「実USB/実機E2E検証」に続き、同じ実USB環境(Intel UHD Graphics 620
+搭載VAIO実機、GUI起動には下記「既知の実機互換性問題」節の回避策
+`i915.enable_psr=0`を適用)で、`MyPocketOS Live (Persistence)`起動中に
+実際のWi-Fi接続E2Eを実施した。
+
+**確認結果**
+
+- `nmcli device status`でWi-Fiデバイス`wlp2s0`(TYPE: `wifi`)を認識
+  していることを確認。
+- `nmcli device wifi list`で周辺の複数SSIDが正常に表示され、Wi-Fi
+  スキャンが動作していることを確認。
+- `nmcli --ask device wifi connect "<実SSID>"`(パスワードは端末内で
+  入力、記録はしない)で実SSIDへの接続に成功したことを確認。
+- `/etc/NetworkManager/system-connections/`に対象SSIDに対応する
+  `.nmconnection`ファイルが所有者`root:root`・パーミッション`0600`で
+  作成されることを確認(この保存先が`/dev/sda3[/etc/NetworkManager/system-connections]`
+  としてPersistence領域からマウントされていることは、上記「実USB/実機
+  E2E検証」節で既に確認済み)。
+- Persistenceモードで再起動後、`nmcli device status`で`wlp2s0`が
+  「接続済み」となり、CONNECTION欄に登録済みの実SSIDが表示されることを
+  確認。
+- 再起動後、パスワードの再入力や手動接続操作を行わずに自動的に再接続
+  したことを確認。
+
+以上により、USB persistence IMG経由の実機環境で、実SSIDへの接続・
+Wi-Fiパスワードを含むNetworkManager接続プロファイルの作成・Persistence
+領域への保存・再起動・自動再接続までを実機E2Eで確認した。
+
+**この検証で確認していない事項**
+
+- 今回の起動が実機のBIOS/UEFIいずれのファームウェアモードによるものかは、
+  上記「実USB/実機E2E検証」節と同様に記録されておらず不明。
+- 複数のWi-Fiプロファイルを記憶させた場合の挙動。
+- Mode A(別ディスク全体)経由でのWi-Fi Persistence実機/VM確認。
+- UEFI環境・Secure Boot環境でのWi-Fi Persistence確認、および未署名
+  バイナリ拒否によるSecure Boot enforcementの実証。
 
 ### 既知の実機互換性問題: Intel UHD Graphics 620 (i915) + PSR (2026-09-06)
 
