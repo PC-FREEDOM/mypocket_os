@@ -44,7 +44,7 @@ edition (`base` または `standard`) の指定が必須です。省略時や不
 ビルドに成功すると、プロジェクトルート直下に `mypocketos-base-amd64.hybrid.iso`
 または`mypocketos-standard-amd64.hybrid.iso`が生成されます (`--image-name`は
 live-buildの正規オプション。旧来の`live-image-amd64.hybrid.iso`という名前は
-今後生成されません)。出力ISOおよび live-build の作業生成物 (`config/binary`
+今後生成されません)。出力ISOおよび live-build の作業生成物 (`binary/`
 などの生成済み設定、`chroot/`、`cache/`、`local/`、`.build/` 等) はGit管理
 対象外です。
 
@@ -1402,10 +1402,22 @@ VM起動して検証したものではない**ことに注意 (両者は同一�
 
 **次の項目は未確認である。**
 
-- 現在の正式スクリプトが生成した成果物そのものについての、上記と同様の
-  VM実地検証 (未実施)。
 - 実USBメモリへの書き込み。
 - 実機BIOS/UEFI起動。
+- 実際のWi-Fi無線接続・自動再接続 (後述「現行(2行版)persistence.confでの
+  VM実地検証 (2026-09-06)」節を参照。VM上ではNetworkManagerプロファイルの
+  永続化機構そのものは確認済みだが、実Wi-Fi電波での接続・自動再接続は
+  未確認のまま)。
+- 未署名バイナリ拒否によるSecure Boot enforcementの実証 (同節を参照)。
+
+**注記(2026-09-06追記)**: 上記でかつて「未確認」としていた「現在の
+正式スクリプトが生成した成果物そのものについてのVM実地検証」は、
+2026-09-06に現行(2行版)`persistence.conf`の成果物に対して実施済みである
+(後述「現行(2行版)persistence.confでのVM実地検証 (2026-09-06)」節を
+参照)。本節の直後にあるプロトタイプIMG検証、および次節の2026-08-29の
+検証は、いずれもこの2026-09-06検証より前の`persistence.conf`
+(1行版、`/home`のみ) に対するものであり、現行の2行版とは版が異なる
+点に注意する。
 
 上記「Live永続化基盤」節で行ったVM実地検証 (GUI/helperによる外部ディスク
 永続化) とは対象が異なり、混同しないこと。
@@ -1426,3 +1438,120 @@ QEMU/KVM VM上で次を確認しました。
 
 上記の検証結果を踏まえ、この構成 (Standard版 + USB persistence 2GiB) の
 配布媒体には、**8GB以上のUSBメモリを推奨**します。
+
+### 現行(2行版)persistence.confでのVM実地検証 (2026-09-06)
+
+上記2026-08-29の検証は、`persistence.conf`が`/home`のみの1行版だった時期
+のものである。その後commit `38fc0fe`(Wi-Fi/NetworkManager設定Persistence
+追加)で`persistence.conf`の内容は現行の2行版
+(`/home`と`/etc/NetworkManager/system-connections`)へ変更されたが、
+この現行版を`scripts/build-usb-persistence-image.sh`で生成した成果物
+そのものについては、2026-09-06まで一度もVM実地検証を行っていなかった。
+本節はこの検証結果を記録する。
+
+**検証対象**
+
+- `main` HEAD: `df924d97b04e35738b286e43132a78324b34b239`
+- Standard版ISO: `mypocketos-standard-amd64.hybrid.iso`
+  (サイズ: 1,793,409,024 bytes、SHA-256:
+  `04dd2ffee5991f8f8719cbd5f4b3445ea4f3788356bb5df9da3e0048d8999351`)
+- persistence領域: 2GiB
+- `persistence.conf`: `/home` と `/etc/NetworkManager/system-connections`
+  の2行(現行版)
+
+**訂正**: 実際のlive-buildの生成先ディレクトリは`binary/`である
+(`config/binary/`ではない。「ビルド仕様」節参照)。
+`build-usb-persistence-image.sh`には`--binary-dir "$(pwd)/binary"`を
+指定して生成した。
+
+**IMG生成結果**
+
+BIOS検証用・UEFI検証用にそれぞれ個別のIMGを生成した(同一IMGファイルを
+2台のVMで同時に使うと書込みが競合するため)。
+
+| 用途 | パス(検証後に削除済み) | SHA-256 |
+|---|---|---|
+| BIOS検証用 | `/var/tmp/mypocketos-standard-usbimg-verify-bios-20260906.img` | `cbb923529cca3b079eec0bdb2bd2156834d522abd3cc7d887eaccdae94574c7f` |
+| UEFI検証用 | `/var/tmp/mypocketos-standard-usbimg-verify-uefi-20260906.img` | `bd655c1943979cf403d8b1002dfb96f2ce64ec8bab8103b83393845da466d552` |
+
+いずれも次を確認した。
+
+- `build-usb-persistence-image.sh`がexit 0で成功。
+- MBR/GPTの整合性確認PASS。
+- El Torito BIOS/UEFI一致確認PASS。
+- ISO9660の読み取りPASS。
+- partition 3: ext4, `LABEL=persistence`, 2GiB。
+- `persistence.conf`の内容が`/home`と
+  `/etc/NetworkManager/system-connections`の2行であること、
+  UID=0/GID=0/mode=0600であることを確認。
+- `e2fsck -fn`で異常なし。
+- 入力ISO・`binary/`の主要ファイルが実行前後で変化しないこと。
+
+**BIOS VM実地検証** (一時VM `mypocketos-usbimg-verify-bios-test`)
+
+- BIOSブートメニュー3項目の表示PASS。
+- Normal Live起動PASS、`nopersistence`確認PASS。
+- `sda1`/`sda2`/`sda3`の認識PASS。
+- Persistence起動PASS。
+- `/home`が`/dev/sda3[/home]`からマウントされることを確認。
+- `/etc/NetworkManager/system-connections`が
+  `/dev/sda3[/etc/NetworkManager/system-connections]`からマウントされる
+  ことを確認(`/home`と同一partitionからの独立bind mount)。
+- `sda3`: `LABEL=persistence`, ext4, 2GiB。
+- `/home`に作成したテストファイルが再起動後も保持されることを確認
+  (SHA-256: `e36c04c913afbe7bae394225acb23e4cb5fafdd0bea00ed70a68fe6f5c22411f`)。
+- NetworkManagerのWi-Fi接続プロファイル(`persistence-verify-wifi.nmconnection`)
+  を疑似作成し(VMには実Wi-Fiデバイスがないため、`nmcli`でWi-Fi種別の
+  プロファイルファイルのみを作成。実接続は行っていない)、
+  所有者`root:root`・パーミッション`0600`であることを確認。
+- 上記プロファイルがPersistence再起動後も保持されることを確認。
+- Normal Liveでは`/home`のテストファイル・NMプロファイルとも非表示に
+  なることを確認。
+- 再度Persistenceに戻すと、両方とも再表示されることを確認。
+
+**UEFI VM実地検証** (一時VM `mypocketos-usbimg-verify-uefi-test`)
+
+- GRUBブートメニューの表示PASS。
+- libvirtのfirmware設定: `firmware='efi'`、`secure-boot enabled='yes'`、
+  `enrolled-keys enabled='yes'`、loader `secure='yes'`
+  (`/usr/share/OVMF/OVMF_CODE_4M.ms.fd`、NVRAMテンプレート
+  `/usr/share/OVMF/OVMF_VARS_4M.ms.fd`)。
+- ゲスト側で`/sys/firmware/efi`の存在を確認(UEFI起動)。
+- ゲスト側でSecure BootのEFI変数の値が`1`であることを確認。
+- 上記のSecure Boot有効なVM環境で、MyPocketOSデスクトップまで起動する
+  ことを確認。**ただし「未署名バイナリが実際に拒否されること」自体は
+  検証していない**(意図的に未署名のブートローダー/カーネルを用意して
+  拒否されることを試す行為はリスクが高いため、本検証の範囲外とした)。
+- Persistence起動PASS。
+- `/home`が`/dev/sda3[/home]`からマウントされることを確認。
+- `/etc/NetworkManager/system-connections`が
+  `/dev/sda3[/etc/NetworkManager/system-connections]`からマウントされる
+  ことを確認。
+- `sda3`: `LABEL=persistence`, ext4, 2GiB。
+- `/home`に作成したテストファイルが再起動後も保持されることを確認
+  (SHA-256: `f26239e18b46fe57a5fc9b789b432b990be998402b3133245efca61d3b9a7b6f`)。
+- NetworkManagerのWi-Fi接続プロファイル(`persistence-verify-wifi-uefi.nmconnection`、
+  BIOS版と同様に疑似作成)について、所有者`root:root`・パーミッション
+  `0600`であることを確認。
+- 上記プロファイルがPersistence再起動後も保持されることを確認。
+- Normal Liveでは`/home`のテストファイル・NMプロファイルとも非表示に
+  なることを確認。
+- 再度Persistenceに戻すと、両方とも再表示されることを確認。
+
+**この検証で確認していない事項**
+
+- 実USBメモリへのIMG書き込み。
+- 実機でのUSB persistence IMG起動(BIOS/UEFIいずれも)。
+- 実際のWi-Fi無線接続・自動再接続(VMには実Wi-Fiデバイスがないため、
+  上記はいずれも`nmcli`によるプロファイルファイル作成のみの確認であり、
+  NetworkManager設定パスのPersistence機構そのものの確認にとどまる)。
+- 実機でのSecure Boot確認。
+- 未署名バイナリ拒否によるSecure Boot enforcementの実証。
+
+**クリーンアップ**
+
+検証後、一時VM定義(`mypocketos-usbimg-verify-bios-test`・
+`mypocketos-usbimg-verify-uefi-test`)・UEFI版のNVRAM・BIOS/UEFI検証用
+IMG 2本を削除済み。恒久VM(`mypocketos-test`・`mypocketos-uefi-test`)、
+および共有ISO・両VMの永続化ディスクを含むKEEP対象ディスクには変更を
+加えていない。
