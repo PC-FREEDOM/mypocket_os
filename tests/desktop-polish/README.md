@@ -25,6 +25,7 @@ tests/desktop-polish/test_icon_theme.sh
 tests/desktop-polish/test_fluent_archive.sh
 tests/desktop-polish/test_battery.sh
 tests/desktop-polish/test_touchpad.sh
+tests/desktop-polish/test_conky_display.sh
 ```
 
 ## 内容
@@ -79,6 +80,19 @@ tests/desktop-polish/test_touchpad.sh
   (`xserver-xorg-input-libinput`への依存元)が既に共通パッケージリストに
   含まれていることを静的に確認する。実Xorg・実libinput・実タッチパッドは
   一切使用しない。
+- `test_conky_display.sh`: Conkyシステム情報パネル
+  (`~/.config/conky/conky.conf`)の表示内容を確認する。既存表示項目
+  (MyPocketOS見出し・ホスト名・カーネル・稼働時間・起動モード・
+  CPU使用率とバー・メモリとバー・ルートFSとバー・既存ショートカット
+  5項目)がいずれも削除・置換されていないこと、新規追加した
+  ネットワーク表示(`${if_gw}`による接続判定、`${downspeed}`/
+  `${upspeed}`によるDown/Up速度、未接続時は「未接続」表示)が
+  特定インターフェース名(`wlan0`/`eth0`等)をハードコードしていない
+  こと、`${exec`系変数(exec/execi)が追加されていないこと、新規追加した
+  ウィンドウスナップ表示4項目(Super+Left/Right/Up/Down)が既存
+  ショートカットの後に区切り線・見出し付きで追加されていること、
+  ネットワーク監視用の新規パッケージ依存が追加されていないことを
+  静的に確認する。実Conky・実Xは一切使用しない。
 
 ## production整合性への影響
 
