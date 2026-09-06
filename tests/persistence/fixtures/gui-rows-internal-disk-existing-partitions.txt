@@ -1,0 +1,3 @@
+NAME="fakedisk" KNAME="fakedisk" PATH="/dev/fakedisk" MAJ:MIN="259:0" TYPE="disk" SIZE="128035676160" RO="0" RM="0" HOTPLUG="0" MOUNTPOINTS="" FSTYPE="" PTTYPE="gpt" LABEL="" PARTLABEL="" PKNAME="" MODEL="OSDisk" SERIAL="OSSER1" TRAN="sata"
+NAME="fakedisk1" KNAME="fakedisk1" PATH="/dev/fakedisk1" MAJ:MIN="259:1" TYPE="part" SIZE="1023410176" RO="0" RM="0" HOTPLUG="0" MOUNTPOINTS="" FSTYPE="vfat" PTTYPE="gpt" LABEL="" PARTLABEL="" PKNAME="fakedisk" MODEL="" SERIAL="" TRAN=""
+NAME="fakedisk2" KNAME="fakedisk2" PATH="/dev/fakedisk2" MAJ:MIN="259:2" TYPE="part" SIZE="126906822656" RO="0" RM="0" HOTPLUG="0" MOUNTPOINTS="" FSTYPE="ext4" PTTYPE="gpt" LABEL="" PARTLABEL="" PKNAME="fakedisk" MODEL="" SERIAL="" TRAN=""

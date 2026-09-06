@@ -72,16 +72,22 @@ instrument_helper() {
         '@@SANDBOX_SYS@@/class/block/$kname/device' \
         2 "$dest"
 
+    # check_holders_empty (2026-09-06修正: 対象disk自身+全子孫デバイスを
+    # DISK_ROWSの各行についてループで確認するようになったため、
+    # $DEVICE_KNAME固定ではなく行ごとの$kname_vを使う)。
     apply_rule helper-sys-holders-dir \
-        '/sys/class/block/\$DEVICE_KNAME/holders' \
-        '@@SANDBOX_SYS@@/class/block/$DEVICE_KNAME/holders' \
+        '/sys/class/block/\$kname_v/holders' \
+        '@@SANDBOX_SYS@@/class/block/$kname_v/holders' \
         1 "$dest"
 
-    # check_usb_transport (create-same-usb専用) が使う実デバイスパス。
+    # check_usb_transport (create-same-usb専用) と、
+    # check_usb_transport_for_existing_partitions (create専用、
+    # 2026-09-06追加、既存partitionを持つディスクのUSB接続確認) の
+    # 計2箇所が同じ実デバイスパスを使う。
     apply_rule helper-sys-device-check-same-usb \
         '/sys/class/block/\$DEVICE_KNAME/device' \
         '@@SANDBOX_SYS@@/class/block/$DEVICE_KNAME/device' \
-        1 "$dest"
+        2 "$dest"
 
     apply_rule helper-proc-cmdline \
         '"\$CMD_CAT" /proc/cmdline' \
@@ -159,9 +165,18 @@ instrument_helper() {
         'if [ "$new_part_parent" != '"'"'@@SANDBOX_DEV@@'"'"' ]' \
         1 "$dest"
 
+    # wipe_existing_signatures (2026-09-06追加) が既存partitionのパスを
+    # 構築する箇所。Mode B (GUI側) のdisk_path構築ルールと同じ考え方。
+    apply_rule helper-existing-part-path-construction \
+        'existing_part_path="/dev/\$name_v"' \
+        'existing_part_path="@@SANDBOX_DEV@@/$name_v"' \
+        1 "$dest"
+
     # ---- -b -> -e 緩和 (root/mknod無しで実block deviceを用意できないため) --
     apply_rule helper-b-device-arg \
         '\[ ! -b "\$device" \]' '[ ! -e "$device" ]' 1 "$dest"
+    apply_rule helper-b-existing-part-path \
+        '\[ ! -b "\$existing_part_path" \]' '[ ! -e "$existing_part_path" ]' 1 "$dest"
     apply_rule helper-b-reverify-device \
         '\[ ! -b "\$DEVICE" \]' '[ ! -e "$DEVICE" ]' 1 "$dest"
     apply_rule helper-b-ancestor-chain \

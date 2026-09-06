@@ -34,12 +34,30 @@ setup_default_sys_tree() {
     : > "$SANDBOX/sys/class/block/fakedisk/device"
 }
 
+# 2026-09-06追加。既存partitionを持つディスクのUSB接続確認
+# (check_usb_transport_for_existing_partitions) をtrue側で通過させる
+# ためのsysfsツリー (test_helper_same_usb.sh の setup_same_usb_sys_tree
+# と同じ考え方)。
+setup_usb_sys_tree() {
+    rm -rf "$SANDBOX/sys"
+    mkdir -p "$SANDBOX/sys/class/block/fakedisk/holders"
+    mkdir -p "$SANDBOX/sys/devices/fake-pci/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0"
+    ln -s "$SANDBOX/sys/devices/fake-pci/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0" \
+        "$SANDBOX/sys/class/block/fakedisk/device"
+}
+
+# 子孫デバイス (KNAME) 用の空holdersディレクトリを用意する。
+setup_descendant_holders_dir() {
+    mkdir -p "$SANDBOX/sys/class/block/$1/holders"
+}
+
 reset_scenario_state() {
     write_mocks "$SANDBOX"
     setup_default_sys_tree
     rm -rf "$SANDBOX/run/lock"
     mkdir -p "$SANDBOX/run/lock"
     rm -f "$SANDBOX/work/parted-called" "$SANDBOX/work/parted-invocations" \
+          "$SANDBOX/work/wipefs-invocations" \
           "$SANDBOX/work/mkfs-called" "$SANDBOX/work/mount-state" \
           "$SANDBOX/work/partprobe-called" "$SANDBOX/work/udevadm-called" \
           "$SANDBOX/work/mount-called" "$SANDBOX/work/umount-called" \
@@ -257,6 +275,75 @@ if [ ! -s "$SANDBOX/work/mount-state" ]; then
     log_bool 'helper_happy_path_mount_state_empty' 1
 else
     log_bool 'helper_happy_path_mount_state_empty' 0
+fi
+
+# ---------- 21: 既存partitionを持つ安全なUSBディスクでの成功経路 ----------
+# 2026-09-06追加。既存partition (子孫デバイス) を持つが、USB接続として
+# 確認でき、子孫が未マウント・非swap・holders空であるディスクは、
+# wipefs -aによる既存署名の能動的な消去を経て、シナリオ20と同じ
+# GPT作成・パーティション作成・mkfs・persistence.conf書き込みまで
+# 完了できることを確認する。
+reset_scenario_state
+setup_usb_sys_tree
+setup_descendant_holders_dir fakedisk1
+: > "$FAKE_PART_PATH"
+part_rows_21="$(use_fixture helper-part-rows-created.txt part-rows-21 __FAKE_PART_PATH__ "$FAKE_PART_PATH")"
+disk_rows_21="$(use_fixture helper-disk-rows-has-child.txt disk-rows-21)"
+env -i PATH='/usr/bin:/bin' SANDBOX="$SANDBOX" \
+    FAKE_DEVICE="$FAKE_DEVICE" \
+    MOCK_UID=0 MOCK_LIVE_MEDIUM_MOUNTED=0 \
+    MOCK_LSBLK_KNAME='fakedisk' MOCK_LSBLK_TYPE=disk MOCK_LSBLK_RO=0 \
+    MOCK_LSBLK_MAJMIN="$DEFAULT_MAJMIN" MOCK_LSBLK_PTTYPE='dos' \
+    MOCK_LSBLK_TRAN='usb' \
+    MOCK_DISK_ROWS_FILE="$disk_rows_21" \
+    MOCK_PART_ROWS_FILE="$part_rows_21" \
+    MOCK_PART_TYPE=part MOCK_PART_RO=0 MOCK_PART_MAJMIN='259:1' \
+    MOCK_LSBLK_PKNAME='fakedisk' MOCK_PART_PATH_FIELD="$FAKE_PART_PATH" \
+    "$COPY" create "$FAKE_DEVICE" "$DEFAULT_MAJMIN" \
+    > "$SANDBOX/work/stdout.21" 2> "$SANDBOX/work/stderr.21" && RC=0 || RC=$?
+log_result 'helper_existing_partitions_happy_path' 0 "$RC"
+
+# wipefs -a が、既存partition (fakedisk1) 自身と対象ディスク (fakedisk)
+# 自身の両方に対して呼ばれていること (順序までは問わず、両者への -a
+# 呼び出しの存在のみを固定文字列一致で確認する。読み取り専用の-n検査は
+# この経路では行わないため、-aの呼び出しのみが記録されているはずである)。
+wipefs_invocations="$SANDBOX/work/wipefs-invocations"
+if grep -qF -- "-a -- $FAKE_PART_PATH" "$wipefs_invocations" 2>/dev/null \
+    && grep -qF -- "-a -- $FAKE_DEVICE" "$wipefs_invocations" 2>/dev/null; then
+    log_bool 'helper_existing_partitions_wipefs_a_called_for_part_and_disk' 1
+else
+    log_bool 'helper_existing_partitions_wipefs_a_called_for_part_and_disk' 0
+fi
+
+# parted はシナリオ20と同様、mklabel gpt / mkpart の2回だけ呼ばれる
+# (既存partitionを持つ場合でも、破壊的操作そのものはシナリオ20と同じ
+# 手順であることの確認)。
+mklabel_count_21="$(grep -cF 'mklabel gpt' "$SANDBOX/work/parted-invocations" 2>/dev/null)" || mklabel_count_21=0
+mkpart_count_21="$(grep -cF 'mkpart' "$SANDBOX/work/parted-invocations" 2>/dev/null)" || mkpart_count_21=0
+total_parted_count_21="$(wc -l < "$SANDBOX/work/parted-invocations" 2>/dev/null)" || total_parted_count_21=0
+if [ "$mklabel_count_21" -eq 1 ] && [ "$mkpart_count_21" -eq 1 ] && [ "$total_parted_count_21" -eq 2 ]; then
+    log_bool 'helper_existing_partitions_parted_called_exactly_mklabel_and_mkpart' 1
+else
+    log_bool 'helper_existing_partitions_parted_called_exactly_mklabel_and_mkpart' 0
+fi
+
+snapshot_21="$SANDBOX/work/persistence.conf.snapshot"
+if [ -e "$snapshot_21" ]; then
+    snapshot_21_size="$(wc -c < "$snapshot_21")"
+    snapshot_21_content="$(cat -- "$snapshot_21")"
+    if [ "$snapshot_21_size" -eq 45 ] && [ "$snapshot_21_content" = "$expected_conf_content" ]; then
+        log_bool 'helper_existing_partitions_persistence_conf_content' 1
+    else
+        log_bool 'helper_existing_partitions_persistence_conf_content' 0
+    fi
+else
+    log_bool 'helper_existing_partitions_persistence_conf_content' 0
+fi
+
+if [ -e "$SANDBOX/run/lock/mypocketos-persistence-setup-helper.lock" ]; then
+    log_bool 'helper_existing_partitions_lock_removed' 0
+else
+    log_bool 'helper_existing_partitions_lock_removed' 1
 fi
 
 echo

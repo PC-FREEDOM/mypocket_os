@@ -1,0 +1,3 @@
+NAME="fakedisk" KNAME="fakedisk" TYPE="disk" MOUNTPOINTS="" FSTYPE=""
+NAME="fakedisk1" KNAME="fakedisk1" TYPE="part" MOUNTPOINTS="" FSTYPE="crypto_LUKS"
+NAME="luks-fakedisk1" KNAME="dm-0" TYPE="crypt" MOUNTPOINTS="/mnt/unlocked" FSTYPE="ext4"

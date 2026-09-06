@@ -527,7 +527,7 @@ case "\$colspec" in
         cat "\${MOCK_ALL_ROWS_FILE:?MOCK_ALL_ROWS_FILE not set}"
         exit 0
         ;;
-    'NAME,TYPE,MOUNTPOINTS')
+    'NAME,KNAME,TYPE,MOUNTPOINTS,FSTYPE')
         cat "\${MOCK_DISK_ROWS_FILE:?MOCK_DISK_ROWS_FILE not set}"
         exit 0
         ;;
@@ -657,6 +657,7 @@ EOF
 
     cat > "$bin/wipefs" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >> "${SANDBOX:?SANDBOX not set}/work/wipefs-invocations"
 tgt="${*##* }"
 if [ "$tgt" = "${FAKE_DEVICE:-}" ]; then
     [ "${MOCK_FAIL_WIPEFS_DEVICE:-0}" = '1' ] && exit 1
