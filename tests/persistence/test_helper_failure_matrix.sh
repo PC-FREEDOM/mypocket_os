@@ -20,7 +20,8 @@
 #     再現に追加のタイミング制御機構を要する) ため、意図的に省略する。
 #       * check_not_swap の NAME解析失敗・awk異常終了
 #         (fetch_disk_rows が事前にNAME/TYPEの解析可能性を保証済みのため)
-#       * check_no_children のTYPE解析失敗 (同上の理由)
+#       * disk_has_descendants (旧check_no_children) のTYPE解析失敗
+#         (同上の理由)
 #       * check_not_home_source のFSTYPE単独解析失敗
 #         (SOURCE/FSTYPEは同一行を1回でパースするため、SOURCE解析失敗と
 #         独立に再現できない)
@@ -69,12 +70,29 @@ SCENARIO_COUNT=0
 # とは別枠で) 失敗マトリクス全体を非0終了にする。条件分岐によるシナリオの
 # 意図しないスキップ・二重実行を検出するための構造検査であり、258件の
 # 既存アサーションには加算しない。
-EXPECTED_SCENARIOS=52
+EXPECTED_SCENARIOS=59
 
 setup_default_sys_tree() {
     rm -rf "$SANDBOX/sys"
     mkdir -p "$SANDBOX/sys/class/block/fakedisk/holders"
     : > "$SANDBOX/sys/class/block/fakedisk/device"
+}
+
+# 2026-09-06追加。既存partitionを持つディスクのUSB接続確認
+# (check_usb_transport_for_existing_partitions) をtrue側で通過させる
+# ためのsysfsツリー。test_helper_same_usb.sh の setup_same_usb_sys_tree と
+# 同じ考え方 (USBバスを模したパスへのシンボリックリンク)。
+setup_usb_sys_tree() {
+    rm -rf "$SANDBOX/sys"
+    mkdir -p "$SANDBOX/sys/class/block/fakedisk/holders"
+    mkdir -p "$SANDBOX/sys/devices/fake-pci/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0"
+    ln -s "$SANDBOX/sys/devices/fake-pci/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0" \
+        "$SANDBOX/sys/class/block/fakedisk/device"
+}
+
+# 子孫デバイス (KNAME) 用の空holdersディレクトリを用意する。
+setup_descendant_holders_dir() {
+    mkdir -p "$SANDBOX/sys/class/block/$1/holders"
 }
 
 reset_scenario_state() {
@@ -88,6 +106,7 @@ reset_scenario_state() {
         rm -rf -- "$d"
     done
     rm -f "$SANDBOX/work/parted-called" "$SANDBOX/work/parted-invocations" \
+          "$SANDBOX/work/wipefs-invocations" \
           "$SANDBOX/work/mkfs-called" "$SANDBOX/work/mount-state" \
           "$SANDBOX/work/partprobe-called" "$SANDBOX/work/udevadm-called" \
           "$SANDBOX/work/mount-called" "$SANDBOX/work/umount-called" \
@@ -143,6 +162,30 @@ run_matrix_case() {
         MOCK_DISK_ROWS_FILE="$disk_rows" \
         "$@" \
         "$COPY" create "$device_arg" "$majmin_arg" \
+        > "$SANDBOX/work/stdout.$name" 2> "$SANDBOX/work/stderr.$name" && RC=0 || RC=$?
+    log_result "$name" "$expected" "$RC"
+    SCENARIO_COUNT=$((SCENARIO_COUNT + 1))
+}
+
+# run_matrix_case_existing NAME EXPECTED_EXIT DISK_ROWS_FIXTURE [env assignments...]
+# 2026-09-06追加。run_matrix_case (常にhelper-disk-rows-clean.txtを使う
+# blank disk用) の、既存partitionを持つディスク版。DISK_ROWS_FIXTUREを
+# 明示的に指定できる点だけが異なる。既定でMOCK_LSBLK_TRAN=usbとする
+# (TRAN自体を拒否理由にしたいシナリオは呼び出し側でMOCK_LSBLK_TRANを
+# 上書きする)。sysfsツリー (USB接続確認の通過可否) は呼び出し側が
+# setup_usb_sys_tree / setup_default_sys_tree で個別に用意する。
+run_matrix_case_existing() {
+    name="$1"; expected="$2"; rows_fixture="$3"; shift 3
+    disk_rows="$(use_fixture "$rows_fixture" "disk-rows-$name")"
+    env -i PATH='/usr/bin:/bin' SANDBOX="$SANDBOX" \
+        FAKE_DEVICE="$FAKE_DEVICE" \
+        MOCK_UID=0 MOCK_LIVE_MEDIUM_MOUNTED=0 \
+        MOCK_LSBLK_KNAME='fakedisk' MOCK_LSBLK_TYPE=disk MOCK_LSBLK_RO=0 \
+        MOCK_LSBLK_MAJMIN="$DEFAULT_MAJMIN" MOCK_LSBLK_PTTYPE='dos' \
+        MOCK_LSBLK_TRAN='usb' \
+        MOCK_DISK_ROWS_FILE="$disk_rows" \
+        "$@" \
+        "$COPY" create "$FAKE_DEVICE" "$DEFAULT_MAJMIN" \
         > "$SANDBOX/work/stdout.$name" 2> "$SANDBOX/work/stderr.$name" && RC=0 || RC=$?
     log_result "$name" "$expected" "$RC"
     SCENARIO_COUNT=$((SCENARIO_COUNT + 1))
@@ -433,16 +476,62 @@ assert_stderr mx14_home_source_unsafe '/home提供元のSOURCEを安全に判定
 assert_stage_bounds mx14_home_source_unsafe no no no no
 assert_lock_released mx14_home_source_unsafe
 assert_run_clean mx14_home_source_unsafe
-# ---------- exit 15: 対象ディスクが未使用ではない ----------
-reset_scenario_state
-child_rows="$(use_fixture helper-disk-rows-has-child.txt mx15-child-rows)"
-run_matrix_case mx15_has_children 15 "$FAKE_DEVICE" "$DEFAULT_MAJMIN" \
-    MOCK_DISK_ROWS_FILE="$child_rows"
-assert_stderr mx15_has_children '既に子パーティションを持っています'
-assert_stage_bounds mx15_has_children no no no no
-assert_lock_released mx15_has_children
-assert_run_clean mx15_has_children
 
+# ---------- exit 14: 既存partitionを持つディスクの子孫安全確認 ----------
+# 2026-09-06追加。子孫デバイス (既存partition) を持つディスクをMode Aで
+# 許可する際、USB接続は確認できても、子孫自身がマウント中/スワップ中/
+# holders使用中であれば引き続き拒否されることを確認する。
+reset_scenario_state
+setup_usb_sys_tree
+child_mounted_rows="$(use_fixture helper-disk-rows-child-mounted.txt mx14-child-mounted-rows)"
+run_matrix_case_existing mx14_existing_partitions_child_mounted 14 \
+    helper-disk-rows-child-mounted.txt \
+    MOCK_DISK_ROWS_FILE="$child_mounted_rows"
+assert_stderr mx14_existing_partitions_child_mounted '既にマウントされています'
+assert_stage_bounds mx14_existing_partitions_child_mounted no no no no
+assert_lock_released mx14_existing_partitions_child_mounted
+assert_run_clean mx14_existing_partitions_child_mounted
+
+reset_scenario_state
+setup_usb_sys_tree
+run_matrix_case_existing mx14_existing_partitions_child_swap 14 \
+    helper-disk-rows-child-swap.txt
+assert_stderr mx14_existing_partitions_child_swap 'スワップとして使用中です'
+assert_stage_bounds mx14_existing_partitions_child_swap no no no no
+assert_lock_released mx14_existing_partitions_child_swap
+assert_run_clean mx14_existing_partitions_child_swap
+
+reset_scenario_state
+setup_usb_sys_tree
+setup_descendant_holders_dir fakedisk1
+: > "$SANDBOX/sys/class/block/fakedisk1/holders/dm-1"
+run_matrix_case_existing mx14_existing_partitions_child_holders 14 \
+    helper-disk-rows-child-holders.txt
+assert_stderr mx14_existing_partitions_child_holders 'device mapper 等の下位デバイスとして使用中です'
+assert_stage_bounds mx14_existing_partitions_child_holders no no no no
+assert_lock_released mx14_existing_partitions_child_holders
+assert_run_clean mx14_existing_partitions_child_holders
+
+# MBR拡張パーティション配下の論理パーティションのようなネストした子孫
+# (直接の子ではなく、子の子) についても、fetch_disk_rows がlsblkの階層
+# 出力をそのまま使うことにより、直接の子だけに限定せず安全確認の対象に
+# なることを確認する。
+reset_scenario_state
+setup_usb_sys_tree
+run_matrix_case_existing mx14_existing_partitions_nested_descendant_mounted 14 \
+    helper-disk-rows-nested-descendant-mounted.txt
+assert_stderr mx14_existing_partitions_nested_descendant_mounted '既にマウントされています'
+assert_stage_bounds mx14_existing_partitions_nested_descendant_mounted no no no no
+assert_lock_released mx14_existing_partitions_nested_descendant_mounted
+assert_run_clean mx14_existing_partitions_nested_descendant_mounted
+
+# ---------- exit 15: 対象ディスクが未使用ではない (子孫を持たない場合) ----------
+# 2026-09-06修正: 子孫デバイス (既存partition) を持つこと自体は、もはや
+# このexit 15の対象ではない。USB接続が確認できないディスクはexit 17
+# (後述) で拒否され、USB接続が確認できるディスクは子孫の安全確認
+# (上記exit 14の各シナリオ) を経て許可されうる。このセクションは、
+# 子孫を持たない (完全未使用の) ディスクのPTTYPE/署名検査のみを対象と
+# する (許可条件は変更していない)。
 reset_scenario_state
 run_matrix_case mx15_pttype_nonempty 15 "$FAKE_DEVICE" "$DEFAULT_MAJMIN" \
     MOCK_LSBLK_PTTYPE='gpt'
@@ -466,6 +555,58 @@ assert_stderr mx15_signature_detected '対象ディスクには既存の署名'
 assert_stage_bounds mx15_signature_detected no no no no
 assert_lock_released mx15_signature_detected
 assert_run_clean mx15_signature_detected
+
+# ---------- exit 17: 既存partitionを持つディスクのUSB接続確認 ----------
+# 2026-09-06追加。子孫デバイス (既存partition) を持つディスクは、USB接続
+# として確認できる場合に限り許可される。内蔵SATA/NVMeディスク等を誤って
+# 初期化対象にしないための確認。
+reset_scenario_state
+setup_default_sys_tree
+setup_descendant_holders_dir fakedisk1
+run_matrix_case_existing mx17_existing_partitions_not_usb_tran 17 \
+    helper-disk-rows-has-child.txt \
+    MOCK_LSBLK_TRAN='sata'
+assert_stderr mx17_existing_partitions_not_usb_tran 'USB接続として確認できません'
+assert_stage_bounds mx17_existing_partitions_not_usb_tran no no no no
+assert_lock_released mx17_existing_partitions_not_usb_tran
+assert_run_clean mx17_existing_partitions_not_usb_tran
+
+reset_scenario_state
+setup_default_sys_tree
+setup_descendant_holders_dir fakedisk1
+run_matrix_case_existing mx17_existing_partitions_usb_path_missing 17 \
+    helper-disk-rows-has-child.txt
+assert_stderr mx17_existing_partitions_usb_path_missing 'USBバスの経路が見つかりません'
+assert_stage_bounds mx17_existing_partitions_usb_path_missing no no no no
+assert_lock_released mx17_existing_partitions_usb_path_missing
+assert_run_clean mx17_existing_partitions_usb_path_missing
+
+# ---------- exit 18: 既存partitionの署名消去 (wipefs -a) の失敗 ----------
+# 2026-09-06追加。USB接続・子孫の安全確認をいずれも通過した後、新規GPT
+# 作成の直前に行う能動的な署名消去 (wipe_existing_signatures) が失敗した
+# 場合、対象ディスクへparted等の破壊的操作を一切行わずに拒否することを
+# 確認する。
+reset_scenario_state
+setup_usb_sys_tree
+setup_descendant_holders_dir fakedisk1
+run_matrix_case_existing mx18_existing_partitions_part_wipe_fail 18 \
+    helper-disk-rows-has-child.txt \
+    MOCK_FAIL_WIPEFS_PART=1
+assert_stderr mx18_existing_partitions_part_wipe_fail '既存パーティションの署名消去'
+assert_stage_bounds mx18_existing_partitions_part_wipe_fail no no no no
+assert_lock_released mx18_existing_partitions_part_wipe_fail
+assert_run_clean mx18_existing_partitions_part_wipe_fail
+
+reset_scenario_state
+setup_usb_sys_tree
+setup_descendant_holders_dir fakedisk1
+run_matrix_case_existing mx18_existing_partitions_device_wipe_fail 18 \
+    helper-disk-rows-has-child.txt \
+    MOCK_FAIL_WIPEFS_DEVICE=1
+assert_stderr mx18_existing_partitions_device_wipe_fail '対象ディスク自身の署名消去'
+assert_stage_bounds mx18_existing_partitions_device_wipe_fail no no no no
+assert_lock_released mx18_existing_partitions_device_wipe_fail
+assert_run_clean mx18_existing_partitions_device_wipe_fail
 
 # ---------- exit 20: GPTパーティションテーブルの作成失敗 ----------
 reset_scenario_state

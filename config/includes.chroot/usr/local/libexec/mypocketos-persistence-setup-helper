@@ -125,6 +125,12 @@ MOUNTED=0
 MNT_DIR=''
 CLEANUP_DONE=0
 SIGNAL_PENDING=''
+# create (Mode A) のfinal_verificationが設定する。1の場合、対象ディスクは
+# 既存partition(子孫デバイス)を持つが、USB接続確認・子孫の未マウント/
+# 非swap/holders空を含む全安全条件を満たしたため許可されたことを示す
+# (2026-09-06追加)。run_mode_createが、破壊的操作開始前に既存署名を
+# 能動的に消去するかどうかの判定に使う。
+HAS_EXISTING_PARTITIONS=0
 # create-same-usb (Mode B) がsfdisk --backupの保存先として作成する一時
 # ディレクトリ。永続的なバックアップ保存は要求せず (自動復元も行わない
 # 方針と同様、保持し続けること自体が追加のリスクになるため)、成功・
@@ -272,7 +278,7 @@ on_exit() {
     # ec=71へ変更した場合、その理由は既に上のprintfで報告済みであり、
     # ここで「未分類」として再度報告しない (二重報告の防止)。
     case " $ec " in
-        ' 0 ' | ' 2 ' | ' 10 ' | ' 11 ' | ' 12 ' | ' 13 ' | ' 14 ' | ' 15 ' | ' 16 ' | \
+        ' 0 ' | ' 2 ' | ' 10 ' | ' 11 ' | ' 12 ' | ' 13 ' | ' 14 ' | ' 15 ' | ' 16 ' | ' 17 ' | ' 18 ' | \
         ' 20 ' | ' 21 ' | ' 22 ' | ' 23 ' | ' 24 ' | ' 25 ' | ' 70 ' | ' 71 ' | \
         ' 30 ' | ' 31 ' | ' 32 ' | ' 33 ' | ' 34 ' | ' 35 ' | ' 36 ' | ' 37 ' | ' 38 ' | ' 39 ' | ' 40 ' | \
         ' 129 ' | ' 130 ' | ' 143 ')
@@ -551,27 +557,33 @@ reverify_device() {
 # 加えず拒否する。検証情報自体が取得できない場合も、許可はせず安全側に
 # 倒す (以下の各チェックはコマンド失敗時にすべて「安全でない」側へ倒す)。
 
-# 対象disk自身とその子パーティションのpairs出力をまとめて1回だけ取得する。
-# デバイスを指定したlsblkは、そのデバイスと配下の子パーティションを
-# まとめて返す (システム全体を走査してPKNAMEで手動フィルタする必要がない)。
+# 対象disk自身とその配下の全block-device子孫 (直接の子パーティションだけ
+# でなく、MBR拡張パーティション配下の論理パーティション、LVM/LUKS等で
+# さらにネストしたデバイスも含む) のpairs出力をまとめて1回だけ取得する。
+# デバイスを指定したlsblkは、そのデバイスと配下の全子孫を階層的にまとめて
+# 返す (システム全体を走査してPKNAMEで手動フィルタする必要がなく、かつ
+# 直接の子だけに限定されない)。
 fetch_disk_rows() {
-    DISK_ROWS="$("$CMD_LSBLK" -b -P -o NAME,TYPE,MOUNTPOINTS -- "$DEVICE" 2>/dev/null)" || DISK_ROWS=''
+    DISK_ROWS="$("$CMD_LSBLK" -b -P -o NAME,KNAME,TYPE,MOUNTPOINTS,FSTYPE -- "$DEVICE" 2>/dev/null)" || DISK_ROWS=''
     if [ -z "$DISK_ROWS" ]; then
         fail 14 "対象ディスクの情報を取得できませんでした (安全側として拒否します): $DEVICE"
     fi
 
-    # 全行についてNAME/TYPE/MOUNTPOINTSのフィールドが解析できることを
-    # 確認する。NAME/TYPEは値が空であること自体を拒否する (対象disk・
-    # 子パーティションには必ず非空の名前・種別があるはずのため)。
-    # MOUNTPOINTS=""のみ正常な値として許可する。1行でも条件を満たさなけ
-    # れば安全側に倒して拒否する。
+    # 全行についてNAME/KNAME/TYPE/MOUNTPOINTS/FSTYPEのフィールドが解析
+    # できることを確認する。NAME/KNAME/TYPEは値が空であること自体を拒否
+    # する (対象disk・子孫デバイスには必ず非空の名前・種別があるはずの
+    # ため)。MOUNTPOINTS=""/FSTYPE=""は正常な値として許可する。1行でも
+    # 条件を満たさなければ安全側に倒して拒否する。
     printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
         name_v="$(printf '%s\n' "$line" | extract_field NAME)" || exit 1
+        kname_v="$(printf '%s\n' "$line" | extract_field KNAME)" || exit 1
         type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || exit 1
         printf '%s\n' "$line" | extract_field MOUNTPOINTS >/dev/null || exit 1
+        printf '%s\n' "$line" | extract_field FSTYPE >/dev/null || exit 1
         [ -n "$name_v" ] || exit 1
+        [ -n "$kname_v" ] || exit 1
         [ -n "$type_v" ] || exit 1
-    done || fail 14 "対象ディスク情報の一部フィールド (NAME/TYPE/MOUNTPOINTS) を解析できないか、NAME/TYPEが空でした (安全側として拒否します): $DEVICE"
+    done || fail 14 "対象ディスク情報の一部フィールド (NAME/KNAME/TYPE/MOUNTPOINTS/FSTYPE) を解析できないか、NAME/KNAME/TYPEが空でした (安全側として拒否します): $DEVICE"
 }
 
 extract_field() {
@@ -642,19 +654,42 @@ check_not_mounted() {
     done
 }
 
-# 対象diskおよび子デバイスが/proc/swapsにないこと (終了コード14)
+# 対象diskおよび全子孫デバイスがswapとして使用されていないこと
+# (終了コード14)。
+#
+# まず各行のFSTYPEを直接確認する。/proc/swapsに現れるのは現在アクティブ
+# なswapのみであり、フォーマット済みだが現在有効化されていないswap
+# パーティション (既存partitionを持つディスクを許可する際に新たに問題に
+# なりうる) を見逃さないための直接確認である。
+#
+# 続いて、DISK_ROWSからKNAME (対象disk自身+全子孫、NAME ではなく KNAME を
+# 使う。LVM/device mapper等でNAMEとKNAMEが異なりうるため) の一覧を作り、
+# /proc/swapsの各エントリの解決先KNAMEがその一覧に含まれるかを grep -Fx
+# (完全一致) で判定する (アクティブなswapの検出。zram等、対象ディスクと
+# 無関係な解決可能swapはこの一覧に含まれないため通過する)。
+#
 # /proc/swapsの読み取り自体に失敗した場合、および常に存在するはずの
 # ヘッダー行すら取得できない (真に空の) 場合は、「スワップなし」と誤認
-# せず安全側 (拒否) に倒す。DISK_ROWSからNAME (対象disk自身+子パーティ
-# ション) の一覧をまず作り、各swapエントリの解決先KNAMEがその一覧に
-# 含まれるかを grep -Fx (完全一致) で判定する。zram等、対象ディスクと
-# 無関係な解決可能swapはこの一覧に含まれないため通過する。
+# せず安全側 (拒否) に倒す。
 check_not_swap() {
+    fstype_rc=0
+    printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
+        fstype_v="$(printf '%s\n' "$line" | extract_field FSTYPE)" || exit 2
+        if [ "$fstype_v" = 'swap' ]; then
+            exit 1
+        fi
+    done || fstype_rc=$?
+    case "$fstype_rc" in
+        0) ;;
+        1) return 1 ;;
+        *) fail 14 "対象ディスクまたはその子孫デバイスのFSTYPE情報を解析できませんでした (安全側として拒否します): $DEVICE" ;;
+    esac
+
     target_knames="$(printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
-        name_v="$(printf '%s\n' "$line" | extract_field NAME)" || exit 1
-        [ -n "$name_v" ] || exit 1
-        printf '%s\n' "$name_v"
-    done)" || fail 14 "対象ディスク情報 (NAME) の解析に失敗したか、NAMEが空でした (安全側として拒否します): $DEVICE"
+        kname_v="$(printf '%s\n' "$line" | extract_field KNAME)" || exit 1
+        [ -n "$kname_v" ] || exit 1
+        printf '%s\n' "$kname_v"
+    done)" || fail 14 "対象ディスク情報 (KNAME) の解析に失敗したか、KNAMEが空でした (安全側として拒否します): $DEVICE"
 
     if ! swaps="$("$CMD_CAT" /proc/swaps 2>/dev/null)"; then
         fail 14 "/proc/swapsの読み取りに失敗しました (安全側として拒否します): $DEVICE"
@@ -683,44 +718,54 @@ check_not_swap() {
 }
 
 # /sys/class/block/<KNAME>/holders が空であること (終了コード14)
-# (対象disk自身のholdersを確認する)
+# (対象disk自身、および全子孫デバイスのholdersを確認する。子孫が
+# device mapper/LVM/RAID等の下位デバイスとして使用中でないことを含む)。
 check_holders_empty() {
-    holders_dir="/sys/class/block/$DEVICE_KNAME/holders"
-    if [ ! -d "$holders_dir" ]; then
-        fail 14 "holders情報を取得できませんでした (安全側として拒否します): $holders_dir"
-    fi
-    if ! holders_list="$("$CMD_LS" -A "$holders_dir" 2>/dev/null)"; then
-        fail 14 "holders情報の取得に失敗しました (安全側として拒否します): $holders_dir"
-    fi
-    if [ -n "$holders_list" ]; then
-        fail 14 "対象ディスクは device mapper 等の下位デバイスとして使用中です: $DEVICE"
-    fi
-}
-
-# 子パーティションがないこと (終了コード15)
-check_no_children() {
-    # 生のgrep -c ... || : には頼らない。DISK_ROWSの各行をextract_field
-    # TYPEで厳密に解析し、TYPEが正確に part の行が1件でもあれば
-    # (exit 1)、TYPEの解析自体に失敗した行があれば (exit 2)、
-    # いずれも子パーティションが存在する場合と同じ拒否結果とする。
-    # パイプラインの終了コードを明示的に捕捉し、set -eの暗黙動作には
-    # 依存しない。
     rc=0
     printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
-        type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || exit 2
-        if [ "$type_v" = 'part' ]; then
+        kname_v="$(printf '%s\n' "$line" | extract_field KNAME)" || exit 4
+        [ -n "$kname_v" ] || exit 4
+        holders_dir="/sys/class/block/$kname_v/holders"
+        if [ ! -d "$holders_dir" ]; then
+            exit 2
+        fi
+        holders_list="$("$CMD_LS" -A "$holders_dir" 2>/dev/null)" || exit 3
+        if [ -n "$holders_list" ]; then
             exit 1
         fi
     done || rc=$?
     case "$rc" in
-        0)
-            ;;
-        1)
-            fail 15 "対象ディスクは既に子パーティションを持っています (whole diskではありません): $DEVICE"
-            ;;
-        *)
-            fail 15 "対象ディスクの子パーティション種別 (TYPE) を解析できませんでした (安全側として拒否します): $DEVICE"
-            ;;
+        0) ;;
+        1) fail 14 "対象ディスクまたはその子孫デバイスが device mapper 等の下位デバイスとして使用中です: $DEVICE" ;;
+        2) fail 14 "holders情報を取得できませんでした (安全側として拒否します): $DEVICE" ;;
+        3) fail 14 "holders情報の取得に失敗しました (安全側として拒否します): $DEVICE" ;;
+        *) fail 14 "対象ディスクまたはその子孫デバイスの情報を解析できませんでした (安全側として拒否します): $DEVICE" ;;
+    esac
+}
+
+# 対象diskに子孫デバイス (partition等、直接の子だけでなくMBR拡張
+# パーティション配下の論理パーティションやLVM/LUKS等でさらにネストした
+# デバイスも含む) が存在するかどうかを判定する (終了コード15、判定不能時)。
+# 戻り値: 0=子孫あり、1=子孫なし (完全に未使用のwhole disk)。
+#
+# 2026-09-06修正: 従来この関数 (旧check_no_children) は子孫が1件でも
+# あれば無条件にexit 15で拒否していた。既存partitionを持つ外付けUSBを
+# Mode Aで安全に許可するため、判定結果を呼び出し側へ返す形へ変更した。
+# 子孫があるだけでは拒否しない (呼び出し側でUSB接続確認・子孫ごとの
+# マウント/スワップ/holders再確認を別途行う)。判定不能な場合のみ、
+# 従来どおりfail-closedでこの時点を拒否する。
+disk_has_descendants() {
+    rc=0
+    printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
+        type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || exit 2
+        if [ "$type_v" != 'disk' ]; then
+            exit 1
+        fi
+    done || rc=$?
+    case "$rc" in
+        0) return 1 ;;
+        1) return 0 ;;
+        *) fail 15 "対象ディスクの子孫デバイス種別 (TYPE) を解析できませんでした (安全側として拒否します): $DEVICE" ;;
     esac
 }
 
@@ -747,6 +792,80 @@ check_no_signature() {
     fi
     if [ -n "$sig" ]; then
         fail 15 "対象ディスクには既存の署名 (パーティションテーブル/ファイルシステム/LUKS/LVM/RAID等) が検出されました: $DEVICE"
+    fi
+}
+
+# ---- 既存partitionを持つディスクのUSB接続確認 (終了コード17) ---------------
+# 2026-09-06追加。子孫デバイス (既存partition) を持つディスクをMode Aの
+# 初期化対象として許可する場合にのみ呼ぶ。内蔵SATA/NVMeディスク等
+# (通常は既存のOS等のパーティションを持つ) を誤って初期化対象にしない
+# ための確認であり、子孫を持たない (完全未使用の) ディスクにはこの確認を
+# 課さない (check_pttype_empty/check_no_signatureの対象のまま、初版から
+# の許可条件を変更しない)。
+#
+# create-same-usb (Mode B) の check_usb_transport と同じ判定方式
+# (TRANの値だけでなく、sysfs上の実デバイスパスがUSBコントローラ配下に
+# あることも確認する) を用いるが、Mode A専用の終了コード・メッセージの
+# ため、ファイル冒頭の設計方針(両モードの検証関数を無理に共通化しない)
+# に従い意図的に別関数として実装する。
+check_usb_transport_for_existing_partitions() {
+    tran="$("$CMD_LSBLK" -dn -o TRAN -- "$DEVICE" 2>/dev/null)" || tran=''
+    if [ "$tran" != 'usb' ]; then
+        fail 17 "対象ディスクは既存パーティションを持ちますが、USB接続として確認できません (内蔵ディスク等を保護するため拒否します。TRAN=${tran:-取得不可}): $DEVICE"
+    fi
+
+    dev_link="/sys/class/block/$DEVICE_KNAME/device"
+    resolved="$("$CMD_READLINK" -f -- "$dev_link" 2>/dev/null)" || resolved=''
+    if [ -z "$resolved" ]; then
+        fail 17 "対象ディスクの実デバイスパスを解決できません: $DEVICE"
+    fi
+    case "$resolved" in
+        */usb[0-9]*/*) ;;
+        *)
+            fail 17 "対象ディスクの実デバイスパスにUSBバスの経路が見つかりません (内蔵ディスク等を保護するため拒否します): $resolved"
+            ;;
+    esac
+}
+
+# ---- 既存partitionを持つディスクの署名消去 (終了コード18) ------------------
+# 2026-09-06追加。上記の全安全確認(USB接続・子孫の未マウント/非swap/
+# holders空)を通過した既存partitionありディスクについて、新規GPT作成の
+# 直前に、既存の各partition自身の署名と、対象ディスク自身の署名
+# (パーティションテーブル) をwipefs -aで能動的に消去する。
+#
+# これを行わずにparted mklabel gpt / mkpartへ進んだ場合、新規作成する
+# 単一partition (1MiB〜100%) のデータ領域が、既存partitionの先頭付近
+# (多くの場合1MiB付近から始まる) と重なるため、mkfs直前の
+# check_created_partition_no_signature が、新規に発生した問題ではなく
+# 単なる旧partitionの残存署名を誤って検出してしまう。事前に能動的な
+# 署名消去を行うことで、この誤検出を避けつつ、
+# check_created_partition_no_signatureが持つ「作成後に何らかの理由で
+# 新しい署名が書き込まれていないか」という本来の防御機能はそのまま
+# 維持する (特別扱い・スキップを行わない)。
+#
+# この時点で既にDEVICEは破壊的操作の対象として確定しているため
+# (直前にreverify_deviceで再確認済み)、失敗時は「途中状態」であることを
+# 明記したメッセージにする。
+wipe_existing_signatures() {
+    rc=0
+    printf '%s\n' "$DISK_ROWS" | while IFS= read -r line; do
+        type_v="$(printf '%s\n' "$line" | extract_field TYPE)" || exit 2
+        [ "$type_v" != 'disk' ] || continue
+        name_v="$(printf '%s\n' "$line" | extract_field NAME)" || exit 2
+        [ -n "$name_v" ] || exit 2
+        existing_part_path="/dev/$name_v"
+        if [ ! -b "$existing_part_path" ]; then
+            exit 2
+        fi
+        "$CMD_WIPEFS" -a -- "$existing_part_path" >/dev/null || exit 1
+    done || rc=$?
+    case "$rc" in
+        0) ;;
+        *) fail 18 "既存パーティションの署名消去 (wipefs -a) に失敗しました。対象ディスクは途中状態になっている可能性があります: $DEVICE" ;;
+    esac
+
+    if ! "$CMD_WIPEFS" -a -- "$DEVICE" >/dev/null; then
+        fail 18 "対象ディスク自身の署名消去 (wipefs -a) に失敗しました。対象ディスクは途中状態になっている可能性があります: $DEVICE"
     fi
 }
 
@@ -893,19 +1012,31 @@ final_verification() {
     fetch_disk_rows
 
     if ! check_not_mounted; then
-        fail 14 "対象ディスクまたはその子パーティションが既にマウントされています: $DEVICE"
+        fail 14 "対象ディスクまたはその子孫デバイスが既にマウントされています: $DEVICE"
     fi
     if ! check_not_swap; then
-        fail 14 "対象ディスクまたはその子パーティションがスワップとして使用中です: $DEVICE"
+        fail 14 "対象ディスクまたはその子孫デバイスがスワップとして使用中です: $DEVICE"
     fi
     check_holders_empty
     check_not_live_source
     check_not_home_source
     check_no_existing_label
     check_no_existing_partlabel
-    check_no_children
-    check_pttype_empty
-    check_no_signature
+
+    # 2026-09-06修正: 既存partition(子孫デバイス)を持つこと自体は、もはや
+    # 無条件の拒否理由ではない。子孫を持つ場合は、対象ディスクがUSB接続
+    # として確認できることを追加で要求したうえで許可する (内蔵SATA/NVMe
+    # ディスク等の保護)。子孫を持たない (完全未使用の) ディスクには、
+    # 従来どおりPTTYPE/署名が完全に空であることを要求する (許可条件を
+    # 変更しない)。
+    if disk_has_descendants; then
+        HAS_EXISTING_PARTITIONS=1
+        check_usb_transport_for_existing_partitions
+    else
+        HAS_EXISTING_PARTITIONS=0
+        check_pttype_empty
+        check_no_signature
+    fi
 }
 
 # =============================================================================
@@ -1703,6 +1834,17 @@ run_mode_create() {
     # (破壊的操作開始前の拒否) を使う。
     reverify_device 12 13
     check_signal
+
+    # 既存partitionを持つディスクとして許可された場合、新規GPT作成の前に
+    # 既存の署名を能動的に消去する (2026-09-06追加、wipe_existing_signatures
+    # のコメント参照)。子孫を持たない (完全未使用の) ディスクでは、
+    # 既にcheck_pttype_empty/check_no_signatureで署名が存在しないことを
+    # 確認済みのため、この処理は行わない (従来どおり)。
+    if [ "$HAS_EXISTING_PARTITIONS" -eq 1 ]; then
+        stage 'wipe-existing-signatures'
+        wipe_existing_signatures
+        check_signal
+    fi
 
     stage 'gpt'
     if ! "$CMD_PARTED" -s -- "$DEVICE" mklabel gpt; then

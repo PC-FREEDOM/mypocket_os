@@ -1,2 +1,2 @@
-NAME="fakedisk" TYPE="disk" MOUNTPOINTS=""
-NAME="fakedisk1" TYPE="part" MOUNTPOINTS=""
+NAME="fakedisk" KNAME="fakedisk" TYPE="disk" MOUNTPOINTS="" FSTYPE=""
+NAME="fakedisk1" KNAME="fakedisk1" TYPE="part" MOUNTPOINTS="" FSTYPE="ext4"

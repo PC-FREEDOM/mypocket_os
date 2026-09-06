@@ -753,6 +753,12 @@ result_message_for() {
         16)
             printf '既存の永続領域 (LABEL/PARTLABEL=persistence) が検出されたため拒否されました。'
             ;;
+        17)
+            printf '対象ディスクは既存のデータを持ちますが、USB接続として確認できなかったため中止しました (内蔵ディスク等を保護するための制限です)。'
+            ;;
+        18)
+            printf '既存データの消去に失敗しました。\n対象ディスクが途中状態になっている可能性があります。'
+            ;;
         20)
             printf 'GPTパーティションテーブルの作成に失敗しました。対象ディスクが途中状態になっている可能性があります。詳細を確認してください。'
             ;;
@@ -1054,11 +1060,24 @@ if [ "$selected_mode" = 'B' ]; then
     # ---- ここから先はキャンセルしない (README.md「GUI操作フロー」5.) ----
     run_helper "$selected_path" "$device_majmin" create-same-usb
 else
-    # ---- Mode A: 警告 + type-to-confirm (取り消し可能なのはここまで、 --
-    # ---- 既存実装から変更なし) --------------------------------------------
+    # ---- Mode A: 警告 + type-to-confirm (取り消し可能なのはここまで) --------
+    # 2026-09-06追加: 対象ディスクに既存パーティションテーブルがあるかを
+    # 確認し、警告文へ明示的に反映する。ここでの判定はあくまで警告文言を
+    # 選ぶための表示目的であり (build_candidatesと同様、予備的なもの)、
+    # 安全上の最終判断ではない。取得に失敗した場合や不明な場合は、より
+    # 安全側の文言 (「既存のデータがある可能性がある」) を選ぶ。実際の
+    # 安全判定・既存データの消去は、この後に呼び出すhelperが独立して
+    # 行う (final_verification / wipe_existing_signatures)。
+    existing_pttype="$(lsblk -dn -o PTTYPE -- "$selected_path" 2>/dev/null)" && pttype_query_ok=1 || pttype_query_ok=0
+    if [ "$pttype_query_ok" -eq 1 ] && [ -z "$existing_pttype" ]; then
+        data_state_text='このディスクは未使用として検出されています。'
+    else
+        data_state_text='このディスクには既存のデータ・パーティションがあります。続行すると、それらはすべて消去されます。'
+    fi
+
     confirm_word="ERASE $selected_path"
-    warning_text="$(printf '警告: この操作でデバイスの全内容が失われます。\n対象: %s\nこの操作は取り消せません。\n続行するには、下の欄に次の文字列を正確に入力してください:\n%s' \
-        "$selected_path" "$confirm_word")"
+    warning_text="$(printf '%s\n警告: この操作でデバイスの全内容が失われます。\n対象: %s\nこの操作は取り消せません。\n続行するには、下の欄に次の文字列を正確に入力してください:\n%s' \
+        "$data_state_text" "$selected_path" "$confirm_word")"
 
     # 同様に、set -eu 下でのキャンセル (yadの非0終了) による即時終了を避ける。
     entry_rc=0
