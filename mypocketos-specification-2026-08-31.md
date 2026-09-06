@@ -367,7 +367,7 @@ README.mdの該当節を参照）。
 | 暗号化 | 初回公開版ではなし |
 | `/ union` | 採用しない |
 
-Wi-Fi／NetworkManager設定のPersistenceは実装済み。2026-09-02、Mode B(同一起動USB)・実機・Legacy/UEFI未特定の環境で、Persistence起動時のWi-Fi再起動後自動接続・`/etc/NetworkManager/system-connections`のPersistenceマウント・接続プロファイルの`root:root`/`0600`・Normal Liveでの非表示・`/home`保持への非回帰を確認済み(詳細は17節)。Mode A・USB persistence IMG経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルでの動作は未確認のまま残っている。認証情報が無暗号化のまま保存される点の注意は14節を参照。
+Wi-Fi／NetworkManager設定のPersistenceは実装済み。2026-09-02、Mode B(同一起動USB)・実機・Legacy/UEFI未特定の環境で、Persistence起動時のWi-Fi再起動後自動接続・`/etc/NetworkManager/system-connections`のPersistenceマウント・接続プロファイルの`root:root`/`0600`・Normal Liveでの非表示・`/home`保持への非回帰を確認済み(詳細は17節)。2026-09-06には、USB persistence IMG経由の実機環境でも同様に、実SSID接続・接続プロファイルのPersistence・再起動後の自動再接続を確認済み(起動方式(BIOS/UEFI)は記録されておらず不明。詳細は8.6節・README参照)。Mode A経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルでの動作は未確認のまま残っている。認証情報が無暗号化のまま保存される点の注意は14節を参照。
 
 `flatpak --user`(5節「追加アプリ導入」参照)によるアプリ本体・ランタイム・remote設定・アプリ設定/データも、いずれも`/home`配下に保存されるため既存のPersistenceでそのまま保持される設計であり、実機のMode B Persistence環境でE2E確認済みである(Flathub remoteの手動登録・mpvのインストール・Persistence再起動後の保持・Normal Liveでの非表示・再Persistenceでの復活を確認。詳細はREADME「Flatpak Persistence 実機/VM E2E確認」節参照)。APTで追加したパッケージ本体そのものの永続化は、上記表「非保存」のとおり初回版では引き続き対象外である。
 
@@ -578,8 +578,17 @@ partitionからマウントされること、テストファイルのPersistence
 保持、Normal Liveでの非表示、再Persistenceでの復活を確認済み(詳細は
 README「実USB/実機E2E検証 (2026-09-06)」節参照)。ただし今回の起動が
 BIOS/UEFIいずれのファームウェアモードによるものかは記録されておらず
-不明であり、実際のWi-Fi無線接続・自動再接続、実機でのSecure Boot確認・
-enforcementの実証は引き続き未確認のまま残っている。
+不明のままである。
+
+同日2026-09-06、同じ実USB環境で実際のWi-Fi接続E2Eも実施した。実SSIDへの
+接続、Wi-Fiパスワードを含むNetworkManager接続プロファイル
+(`root:root`/`0600`)の作成、Persistence領域への保存、Persistence再起動後の
+自動再接続(パスワード再入力・手動接続操作なし)までを実機で確認済み
+(詳細はREADME「USB persistence IMG経由の実Wi-Fi接続E2E検証
+(2026-09-06)」節参照)。起動方式(BIOS/UEFI)が不明である点は上記と同様。
+複数Wi-Fiプロファイル保持、Mode A経由、UEFI環境、Secure Boot環境での
+Wi-Fi Persistence確認、および未署名バイナリ拒否によるSecure Boot
+enforcementの実証は、引き続き未確認のまま残っている。
 
 ## 8.7 将来候補
 
@@ -758,7 +767,7 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - edition別ISO
 - Normal Live／Persistence／Fail-safe
 - `/home` Persistence
-- Wi-Fi／NetworkManager設定のPersistence (Mode B実機確認済み、他経路は確認前)
+- Wi-Fi／NetworkManager設定のPersistence (Mode B・USB persistence IMG経由は実機確認済み、他経路は確認前)
 - Mode A
 - Mode B
 - USB persistence IMG
@@ -794,7 +803,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - Secure Boot
 - 最低RAM
 - 必要に応じDebian Installer E2E
-- Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02に実機確認済み。Mode A／USB persistence IMG経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
+- Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02、USB persistence IMG経由は2026-09-06に実機確認済み。Mode A経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
 
 ## 16.3 配布仕様
 
@@ -825,7 +834,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | 実USB Mode B Persistence | ✅ |
 | Persistence再起動後 `/home`保持 | ✅ |
 | Normal Liveとの分離 | ✅ |
-| Persistence再起動後Wi-Fi設定保持 (VM/実機) | ✅ Mode B実機、2026-09-02時点(Mode A／USB persistence IMG／UEFI／Secure Boot未確認) |
+| Persistence再起動後Wi-Fi設定保持 (VM/実機) | ✅ Mode B実機(2026-09-02)・USB persistence IMG経由実機(2026-09-06)、いずれも起動方式(BIOS/UEFI)は不明(Mode A／UEFI／Secure Boot未確認) |
 | 実USB UEFI | ⬜ |
 | Persistence作成済みUSBのUEFI | ⬜ |
 | Secure Boot | ⬜ |
