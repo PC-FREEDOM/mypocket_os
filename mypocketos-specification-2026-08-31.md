@@ -659,6 +659,30 @@ jgmenu_run apps | jgmenu --at-pointer --simple
 
 Base／Standard VM確認済み。
 
+## 9.3 タッチパッド既定動作 (2026-09-06)
+
+`/etc/X11/xorg.conf.d/51-mypocketos-touchpad.conf`でlibinputドライバの
+`InputClass`を設定し、機種・タッチパッド製品名に依存しない標準タップ
+操作を初期状態から有効にする。
+
+対象: `MatchIsTouchpad "on"`(デバイス名・vendor ID等のハードコードなし)
+でlibinputがタッチパッドと分類したデバイスのみ。マウス・トラックポイント
+(pointing stick)・タッチスクリーンには適用しない。
+
+設定オプション:
+- `Tapping "on"`(1本指タップ=左クリック等のtap-to-clickを有効化)
+- `TappingButtonMap "lrm"`(1/2/3本指タップ→左/右/中クリック。libinput
+  既定値と同じ値を明示)
+- `TappingDrag "on"`(タップ&ドラッグ)
+- `ScrollMethod "twofinger"`(2本指スクロール)
+
+ファイル名`51-`は、`xserver-xorg-input-libinput`パッケージ提供の既定
+`40-libinput.conf`より後に読み込まれるようにするため。新規パッケージ
+追加は不要(既存の`xserver-xorg-input-all`が`xserver-xorg-input-libinput`
+に依存済み)。`tests/desktop-polish/test_touchpad.sh`で静的/モック確認済み。
+**実機・VMでのタップ操作の動作確認は未実施のまま残っている**(16.2節
+参照)。
+
 ---
 
 # 10. 通常インストール
@@ -850,6 +874,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - 必要に応じDebian Installer E2E
 - Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02、USB persistence IMG経由は2026-09-06に実機確認済み。Mode A経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
 - Mode A(既存partionを持つ外付けUSBの安全な初期化、2026-09-06拡張)の実機E2E(候補表示から作成・Persistence起動・再起動保持までの一連の流れは2026-09-06に実機確認済み。ただしhelper内部コマンドの個別トレース、署名・mount・swap・holders等の個々の拒否条件を実ブロックデバイスで確認する実機試験、UEFI/Secure Boot環境での確認は未実施のまま、8.3節参照)
+- タッチパッド既定動作(libinput InputClass、2026-09-06追加)のVM/実機動作確認(1本指タップ=左クリック・2本指タップ=右クリック・2本指スクロール・タップ&ドラッグが実際のタッチパッドで機能することの確認。現時点では静的確認・モックテストのみで、実機・VMでのタップ操作そのものの確認は未実施、9.3節参照)
 
 ## 16.3 配布仕様
 

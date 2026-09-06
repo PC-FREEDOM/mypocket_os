@@ -305,6 +305,47 @@ HiDPI等を除いた派生サブセットです。** MyPocketOS独自のアイ�
 アーカイブは12,220ファイル・約57MB相当を単一tar.gzに圧縮したもので、
 リポジトリへのコミットサイズは展開状態より大幅に小さくなります。
 
+### タッチパッド既定動作 (2026-09-06)
+
+ノートPCで起動した直後から、一般的なタッチパッド操作を機種やタッチパッド
+製品名に依存せず使えるようにするため、libinputドライバ向けのXorg
+`InputClass`設定を追加しています。
+
+- 設定ファイル: `/etc/X11/xorg.conf.d/51-mypocketos-touchpad.conf`
+  (`config/includes.chroot/etc/X11/xorg.conf.d/51-mypocketos-touchpad.conf`
+  としてリポジトリに収録)。
+- 標準動作:
+  - 1本指タップ = 左クリック
+  - 2本指タップ = 右クリック
+  - 3本指タップ = libinput既定の`TappingButtonMap`(`lrm`)どおり中クリック
+  - 2本指スクロール
+  - タップ&ドラッグ(1本指タップ後そのまま指を置き続けるとドラッグ)
+  - 物理クリック(ボタン)は従来どおり使用可能
+- 設定したlibinputオプション: `Tapping "on"`・`TappingButtonMap "lrm"`・
+  `TappingDrag "on"`・`ScrollMethod "twofinger"`。
+- `InputClass`セクションは`MatchIsTouchpad "on"`(デバイス名・vendor ID
+  等のハードコードなし)でlibinputがタッチパッドと分類したデバイスにのみ
+  適用され、マウス・トラックポイント(pointing stick)・タッチスクリーン
+  には影響しません。
+- 既存の`xserver-xorg-input-all`パッケージ(`xserver-xorg-input-libinput`
+  への依存元、既存の共通パッケージリストに元々含まれている)をそのまま
+  利用しており、新規パッケージの追加は不要です。
+- xinputコマンドをOpenbox autostart等でログイン後に大量実行する方式では
+  なく、Xorg起動時に読み込まれる標準の`xorg.conf.d`スニペットのみで実現
+  しています。Openbox autostart (`~/.config/openbox/autostart`) 側の変更
+  はありません。
+- ファイル名は`51-`とし、`xserver-xorg-input-libinput`パッケージが提供する
+  既定の`/usr/share/X11/xorg.conf.d/40-libinput.conf`(`40-`)より後に
+  読み込まれるようにしています(Xorgは`xorg.conf.d`配下をファイル名順に
+  読み込み、後から読み込まれた`InputClass`の`Option`が同じデバイスに対して
+  優先されます)。
+- `tests/desktop-polish/test_touchpad.sh`で、上記オプションの値・
+  タッチパッド限定であること・デバイス名やvendor ID等のハードコードが
+  無いこと・他デバイスクラス(マウス等)へ誤適用されていないことを静的に
+  確認しています。**この時点ではソースコードの静的確認・モックテストの
+  みが完了しており、実機・VMでのタップ操作の動作確認は未実施です**
+  (次回のVM/実機確認項目として別途記録します)。
+
 ## Live環境のログイン
 
 MyPocketOSのLive環境は、通常起動時にlive-configの自動ログイン機能により
