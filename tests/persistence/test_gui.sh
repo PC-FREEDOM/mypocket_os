@@ -38,6 +38,24 @@ setup_default_sys_tree() {
     : > "$SANDBOX/dev/fakedisk"
 }
 
+# 子パーティションを持つ既存partitionsシナリオ用: /sys/class/block/<kname>/
+# deviceを実USB接続を模したパスへのシンボリックリンクにする
+# (test_gui_same_usb.sh の setup_same_usb_sys_tree と同じ考え方。
+# build_candidatesが子パーティションを持つdiskをUSB接続と確認する際に
+# 参照する)。
+setup_usb_class_device_symlink() {
+    kname="$1"
+    mkdir -p "$SANDBOX/sys/devices/fake-pci/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0"
+    mkdir -p "$SANDBOX/sys/class/block/$kname"
+    ln -sf "$SANDBOX/sys/devices/fake-pci/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0" \
+        "$SANDBOX/sys/class/block/$kname/device"
+}
+
+# 子パーティション (KNAME) 用の空holdersディレクトリを用意する。
+setup_child_holders_dir() {
+    mkdir -p "$SANDBOX/sys/class/block/$1/holders"
+}
+
 reset_scenario_state() {
     write_mocks "$SANDBOX"
     setup_default_sys_tree
@@ -305,6 +323,138 @@ if [ -e "$progress_invocation" ] \
     log_bool 'gui_progress_indeterminate_not_percentage' 1
 else
     log_bool 'gui_progress_indeterminate_not_percentage' 0
+fi
+
+# ---------- 14: 既存partitionあり (未マウント) でもMode A候補に出る ----------
+# 実機確認 (2026-09-06): Debian ISOを書き込んだ一般的な外付けUSBメモリが
+# 既存パーティションテーブルを理由に候補から落ちていた不具合の回帰防止。
+reset_scenario_state
+rows_file="$(use_fixture gui-rows-existing-partitions-clean.txt 14)"
+setup_usb_class_device_symlink fakedisk
+setup_child_holders_dir fakedisk1
+setup_child_holders_dir fakedisk2
+env -i PATH='/usr/bin:/bin' HOME="$HOME" SANDBOX="$SANDBOX" \
+    XDG_RUNTIME_DIR="$SANDBOX/xdg-runtime" \
+    MOCK_ALL_ROWS_FILE="$rows_file" MOCK_LIST_RC=1 \
+    "$COPY" > /dev/null 2> "$SANDBOX/work/stderr.14" && RC=0 || RC=$?
+log_result 'gui_candidate_existing_partitions_clean' 0 "$RC"
+if notice_shows '対象デバイスが見つかりません'; then
+    log_bool 'gui_candidate_existing_partitions_clean_not_empty' 0
+else
+    log_bool 'gui_candidate_existing_partitions_clean_not_empty' 1
+fi
+
+# ---------- 15: ISO hybrid由来 (iso9660+vfat) でもMode A候補に出る ----------
+# 実機で確認したsdc (sdc1=iso9660, sdc2=vfat) の構成を再現する。
+reset_scenario_state
+rows_file="$(use_fixture gui-rows-existing-partitions-iso-hybrid.txt 15)"
+setup_usb_class_device_symlink fakedisk
+setup_child_holders_dir fakedisk1
+setup_child_holders_dir fakedisk2
+env -i PATH='/usr/bin:/bin' HOME="$HOME" SANDBOX="$SANDBOX" \
+    XDG_RUNTIME_DIR="$SANDBOX/xdg-runtime" \
+    MOCK_ALL_ROWS_FILE="$rows_file" MOCK_LIST_RC=1 \
+    "$COPY" > /dev/null 2> "$SANDBOX/work/stderr.15" && RC=0 || RC=$?
+log_result 'gui_candidate_existing_partitions_iso_hybrid' 0 "$RC"
+if notice_shows '対象デバイスが見つかりません'; then
+    log_bool 'gui_candidate_existing_partitions_iso_hybrid_not_empty' 0
+else
+    log_bool 'gui_candidate_existing_partitions_iso_hybrid_not_empty' 1
+fi
+
+# ---------- 16: 子partitionがマウント中なら候補に出ない ----------
+reset_scenario_state
+rows_file="$(use_fixture gui-rows-existing-partitions-child-mounted.txt 16)"
+setup_usb_class_device_symlink fakedisk
+setup_child_holders_dir fakedisk1
+setup_child_holders_dir fakedisk2
+env -i PATH='/usr/bin:/bin' HOME="$HOME" SANDBOX="$SANDBOX" \
+    XDG_RUNTIME_DIR="$SANDBOX/xdg-runtime" \
+    MOCK_ALL_ROWS_FILE="$rows_file" \
+    "$COPY" > /dev/null 2> "$SANDBOX/work/stderr.16" && RC=0 || RC=$?
+log_result 'gui_candidate_existing_partitions_child_mounted_excluded' 0 "$RC"
+if notice_shows '対象デバイスが見つかりません'; then
+    log_bool 'gui_candidate_existing_partitions_child_mounted_excluded_empty' 1
+else
+    log_bool 'gui_candidate_existing_partitions_child_mounted_excluded_empty' 0
+fi
+
+# ---------- 17: 子partitionがswap使用中なら候補に出ない ----------
+reset_scenario_state
+rows_file="$(use_fixture gui-rows-existing-partitions-child-swap.txt 17)"
+setup_usb_class_device_symlink fakedisk
+setup_child_holders_dir fakedisk1
+setup_child_holders_dir fakedisk2
+env -i PATH='/usr/bin:/bin' HOME="$HOME" SANDBOX="$SANDBOX" \
+    XDG_RUNTIME_DIR="$SANDBOX/xdg-runtime" \
+    MOCK_ALL_ROWS_FILE="$rows_file" \
+    "$COPY" > /dev/null 2> "$SANDBOX/work/stderr.17" && RC=0 || RC=$?
+log_result 'gui_candidate_existing_partitions_child_swap_excluded' 0 "$RC"
+if notice_shows '対象デバイスが見つかりません'; then
+    log_bool 'gui_candidate_existing_partitions_child_swap_excluded_empty' 1
+else
+    log_bool 'gui_candidate_existing_partitions_child_swap_excluded_empty' 0
+fi
+
+# ---------- 18: 子partitionにholders (device mapper等) があれば候補に出ない ----------
+reset_scenario_state
+rows_file="$(use_fixture gui-rows-existing-partitions-child-holders.txt 18)"
+setup_usb_class_device_symlink fakedisk
+setup_child_holders_dir fakedisk1
+: > "$SANDBOX/sys/class/block/fakedisk1/holders/dm-1"
+setup_child_holders_dir fakedisk2
+env -i PATH='/usr/bin:/bin' HOME="$HOME" SANDBOX="$SANDBOX" \
+    XDG_RUNTIME_DIR="$SANDBOX/xdg-runtime" \
+    MOCK_ALL_ROWS_FILE="$rows_file" \
+    "$COPY" > /dev/null 2> "$SANDBOX/work/stderr.18" && RC=0 || RC=$?
+log_result 'gui_candidate_existing_partitions_child_holders_excluded' 0 "$RC"
+if notice_shows '対象デバイスが見つかりません'; then
+    log_bool 'gui_candidate_existing_partitions_child_holders_excluded_empty' 1
+else
+    log_bool 'gui_candidate_existing_partitions_child_holders_excluded_empty' 0
+fi
+
+# ---------- 19: read-onlyディスクは (既存partitionの有無によらず) 候補に出ない ----------
+run_gui gui_candidate_readonly_excluded 0 gui-rows-readonly.txt
+if notice_shows '対象デバイスが見つかりません'; then
+    log_bool 'gui_candidate_readonly_excluded_empty' 1
+else
+    log_bool 'gui_candidate_readonly_excluded_empty' 0
+fi
+
+# ---------- 20: 内蔵SATA/NVMeディスク (既存partitionあり) は候補に出ない ----------
+# 実機確認 (2026-09-06): 内蔵SSD (/dev/sda, SATA) を誤ってMode A候補に
+# しないことの回帰防止。TRANがusbでないため、子パーティションの有無に
+# 関わらずMode A候補にはしない (USB接続確認のsysfsシンボリックリンクは
+# 意図的に用意しない。TRAN不一致の時点で除外されるべきシナリオのため)。
+run_gui gui_candidate_internal_disk_existing_partitions_excluded 0 \
+    gui-rows-internal-disk-existing-partitions.txt
+if notice_shows '対象デバイスが見つかりません'; then
+    log_bool 'gui_candidate_internal_disk_existing_partitions_excluded_empty' 1
+else
+    log_bool 'gui_candidate_internal_disk_existing_partitions_excluded_empty' 0
+fi
+
+# ---------- 21: MyPocketOS起動USB (既存partitionあり) はMode A候補にしない ----------
+# 既存partitionを理由にした除外を緩和した後も、Live起動元デバイスの除外
+# (祖先KNAME追跡) が独立して機能し続けることの回帰防止。ISO hybrid構成
+# (iso9660+vfat) でも、Live起動元であればMode A候補にはならない。
+reset_scenario_state
+rows_file="$(use_fixture gui-rows-existing-partitions-iso-hybrid.txt 21)"
+setup_usb_class_device_symlink fakedisk
+setup_child_holders_dir fakedisk1
+setup_child_holders_dir fakedisk2
+: > "$SANDBOX/dev/fake-live-source"
+env -i PATH='/usr/bin:/bin' HOME="$HOME" SANDBOX="$SANDBOX" \
+    XDG_RUNTIME_DIR="$SANDBOX/xdg-runtime" \
+    MOCK_ALL_ROWS_FILE="$rows_file" \
+    MOCK_LIVE_SOURCE="$SANDBOX/dev/fake-live-source" MOCK_ANCESTOR_KNAME='fakedisk' \
+    "$COPY" > /dev/null 2> "$SANDBOX/work/stderr.21" && RC=0 || RC=$?
+log_result 'gui_candidate_live_source_existing_partitions_excluded' 0 "$RC"
+if notice_shows '対象デバイスが見つかりません'; then
+    log_bool 'gui_candidate_live_source_existing_partitions_excluded_empty' 1
+else
+    log_bool 'gui_candidate_live_source_existing_partitions_excluded_empty' 0
 fi
 
 echo

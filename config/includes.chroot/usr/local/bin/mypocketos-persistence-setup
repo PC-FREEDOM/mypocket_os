@@ -395,7 +395,6 @@ $home_chain"
         ro_v="$(printf '%s\n' "$line" | extract_field RO)" || continue
         mp_v="$(printf '%s\n' "$line" | extract_field MOUNTPOINTS)" || continue
         fstype_v="$(printf '%s\n' "$line" | extract_field FSTYPE)" || continue
-        pttype_v="$(printf '%s\n' "$line" | extract_field PTTYPE)" || continue
         model_v="$(printf '%s\n' "$line" | extract_field MODEL)" || continue
         serial_v="$(printf '%s\n' "$line" | extract_field SERIAL)" || continue
         tran_v="$(printf '%s\n' "$line" | extract_field TRAN)" || continue
@@ -419,35 +418,90 @@ $home_chain"
 
         [ "$ro_v" = '0' ] || continue
 
-        # パーティションテーブルが存在しないことを許可条件とする
-        # (PTTYPEが空、かつ自分自身を親とする子パーティション行がない)。
-        # 子パーティション行のPKNAME解析に失敗した場合も、子の有無を安全に
-        # 判定できないため、この候補を除外する (fail-closed)。
-        [ -z "$pttype_v" ] || continue
-        rc=0
+        # 既存パーティションテーブルや既存パーティションの存在それ自体は
+        # 除外理由としない。Debian ISOや他OSのインストーラを書き込んだ
+        # 一般的な外付けUSBメモリ等、既存partitionを持つディスクもMode A
+        # (「対象ディスク全体を初期化」) の候補として選択できるようにする
+        # (実機確認、2026-09-06。README「GUI側の予備的な候補除外」節
+        # 参照)。実際に初期化できるかどうかの最終判断は、この一覧とは
+        # 独立にhelperが破壊的操作の直前に読み取り専用の手段で再検証する
+        # (既存パーティションテーブルが残っている場合、helperは現行の
+        # 安全設計どおり拒否する。この一覧に出ること自体が初期化成功を
+        # 保証するものではない)。
+        #
+        # 子パーティション (自分自身を親とするPKNAME一致行) の有無を判定
+        # する。子パーティション行のPKNAME解析に失敗した場合も、子の有無を
+        # 安全に判定できないため、この候補を除外する (fail-closed)。
+        has_children_rc=0
         printf '%s\n' "$all_rows" | while IFS= read -r cline; do
             [ -n "$cline" ] || continue
             cpk="$(printf '%s\n' "$cline" | extract_field PKNAME)" || exit 2
             if [ "$cpk" = "$kname_v" ]; then
                 exit 1
             fi
-        done || rc=$?
-        case "$rc" in
-            0) ;;
+        done || has_children_rc=$?
+        case "$has_children_rc" in
+            0) has_children=0 ;;
+            1) has_children=1 ;;
             *) continue ;;
         esac
 
-        # マウントなし (自分自身・子パーティションとも)。子パーティション
-        # 行のPKNAME/MOUNTPOINTS解析に失敗した場合も、マウント有無を安全に
-        # 判定できないため、この候補を除外する (fail-closed)。
-        [ -z "$mp_v" ] || continue
+        # 子パーティションを持つディスクを候補にする場合は、内蔵SATA/NVMe
+        # ディスク (通常は既存のOS等のパーティションを持つ) を誤って
+        # Mode A候補にしないよう、build_same_usb_candidate (Mode B) と同じ
+        # 判定方式で、対象ディスクが実際にUSB接続であることを確認する
+        # (TRANの値だけでなく、sysfs上の実デバイスパスがUSBコントローラ
+        # 配下にあることも確認する。片方だけでは不十分なため両方を見る)。
+        # 子パーティションを持たない (完全に未使用な) ディスクについては、
+        # 既存方針どおりこの接続方式の確認を課さない (内蔵の未使用disk全体
+        # をMode A対象にできる、初版からの許可条件を変更しない)。
+        if [ "$has_children" -eq 1 ]; then
+            [ "$tran_v" = 'usb' ] || continue
+            usb_resolved="$(readlink -f -- "/sys/class/block/$kname_v/device" 2>/dev/null)" || continue
+            [ -n "$usb_resolved" ] || continue
+            case "$usb_resolved" in
+                */usb[0-9]*/*) ;;
+                *) continue ;;
+            esac
+        fi
+
+        # 子パーティションが存在する場合、その全ての子パーティションに
+        # ついて「マウントされていない」「スワップとして使用されていない」
+        # 「holdersが空 (device mapper等の下位デバイスでない)」ことを確認
+        # する。子パーティション行のPKNAME/MOUNTPOINTS/FSTYPE解析、または
+        # 子パーティションのholders確認のいずれかに失敗した場合も、安全に
+        # 判定できないためこの候補を除外する (fail-closed)。
+        #
+        # 既知の制限: ここで確認するのはdiskの直接の子パーティション
+        # (PKNAMEがこのdiskのKNAMEと一致する行) のみである。MBR拡張
+        # パーティション配下の論理パーティション (PKNAMEが拡張
+        # パーティションを指す行) はこの確認の対象に含まれない。
         rc=0
         printf '%s\n' "$all_rows" | while IFS= read -r cline; do
             [ -n "$cline" ] || continue
             cpk="$(printf '%s\n' "$cline" | extract_field PKNAME)" || exit 2
             [ "$cpk" = "$kname_v" ] || continue
+
+            ckname="$(printf '%s\n' "$cline" | extract_field KNAME)" || exit 2
+            [ -n "$ckname" ] || exit 2
+
             cmp="$(printf '%s\n' "$cline" | extract_field MOUNTPOINTS)" || exit 2
             if [ -n "$cmp" ]; then
+                exit 1
+            fi
+
+            cfstype="$(printf '%s\n' "$cline" | extract_field FSTYPE)" || exit 2
+            if [ "$cfstype" = 'swap' ]; then
+                exit 1
+            fi
+            if [ -n "$swap_knames" ] && printf '%s\n' "$swap_knames" | grep -Fxq -- "$ckname"; then
+                exit 1
+            fi
+
+            cholders_dir="/sys/class/block/$ckname/holders"
+            [ -d "$cholders_dir" ] || exit 2
+            cholders_list="$(ls -A "$cholders_dir" 2>/dev/null)" || exit 2
+            if [ -n "$cholders_list" ]; then
                 exit 1
             fi
         done || rc=$?
@@ -456,7 +510,13 @@ $home_chain"
             *) continue ;;
         esac
 
-        # スワップでないこと (FSTYPE=swap、または/proc/swapsに現れるKNAME)。
+        # disk自身がマウントされていないこと (パーティションテーブルを
+        # 持たないsuperfloppy形式等、diskそのものへ直接ファイルシステムが
+        # 作られているケースを想定した、既存のdisk自身に対する確認)。
+        [ -z "$mp_v" ] || continue
+
+        # disk自身がスワップとして使用されていないこと (FSTYPE=swap、
+        # または/proc/swapsに現れるKNAME)。
         [ "$fstype_v" != 'swap' ] || continue
         if [ -n "$swap_knames" ] && printf '%s\n' "$swap_knames" | grep -Fxq -- "$kname_v"; then
             continue

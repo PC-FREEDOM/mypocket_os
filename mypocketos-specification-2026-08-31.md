@@ -393,15 +393,28 @@ GUIは一般ユーザー権限で予備選別し、破壊的操作直前にroot 
 
 対象：
 - 完全に未使用の別ディスク全体
+- helperによる実際の初期化(GPT作成)は、現行の安全設計どおり完全に
+  未使用のディスクのみを対象とする(変更なし)
 
-主な除外：
+GUI候補一覧(予備的、2026-09-06修正)：
+- 既存partitionを持つディスクは、それだけを理由に候補から除外しない。
+  USB接続と確認できる(TRAN=usbかつsysfs実体パスがUSBコントローラ配下)
+  ディスクに限り、全ての子パーティションが未マウント・非swap・holders
+  空であれば候補にする。内蔵SATA/NVMe等USB接続と確認できないディスクは
+  既存partitionがあれば引き続き除外する。詳細はREADME「GUI側の予備的な
+  候補除外」節参照。候補に出ることは初期化成功を保証しない(下記主な
+  除外のとおりhelperは引き続き未使用ディスクのみを受け付ける)。
+
+主な除外(候補一覧・helper共通)：
 - Live起動元
 - `/home`提供元
-- 既存partitionあり
-- mount中／swap中
+- mount中／swap中(子パーティション含む)
 - read-only
 - loop / mapper / RAID / 不明デバイス
 - 既存`LABEL=persistence`または`PARTLABEL=persistence`
+
+主な除外(helperのみ、実際の初期化の前提条件)：
+- 既存partitionテーブル・署名(`wipefs`検出分含む)あり
 
 処理：
 1. GPT作成

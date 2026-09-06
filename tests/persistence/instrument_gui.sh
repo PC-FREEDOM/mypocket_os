@@ -47,10 +47,13 @@ instrument_gui() {
         '@@SANDBOX_SYS@@/block/' \
         2 "$dest"
 
+    # build_candidatesのholders確認 (disk自身・子パーティション)・USB接続
+    # 確認 (readlink -f) と、build_same_usb_candidateのUSB接続確認の
+    # 計4箇所に出現する。
     apply_rule gui-sys-class-block \
         '/sys/class/block/' \
         '@@SANDBOX_SYS@@/class/block/' \
-        2 "$dest"
+        4 "$dest"
 
     apply_rule gui-proc-cmdline \
         'cat /proc/cmdline' \
