@@ -1565,11 +1565,18 @@ BIOS検証用・UEFI検証用にそれぞれ個別のIMGを生成した(同一IM
 
 **この検証で確認していない事項**
 
-- 実USBメモリへのIMG書き込み。
-- 実機でのUSB persistence IMG起動(BIOS/UEFIいずれも)。
+- 実USBメモリへのIMG書き込み。**2026-09-06に別途実施済み**(下記
+  「実USB/実機E2E検証 (2026-09-06)」節を参照)。
+- 実機でのUSB persistence IMG起動(BIOS/UEFIいずれも)。**基本的な`/home`
+  Persistenceの実機起動は2026-09-06に確認済みだが、起動方式(BIOS/UEFI)
+  は記録されておらず不明**(下記「実USB/実機E2E検証 (2026-09-06)」節を
+  参照)。
 - 実際のWi-Fi無線接続・自動再接続(VMには実Wi-Fiデバイスがないため、
   上記はいずれも`nmcli`によるプロファイルファイル作成のみの確認であり、
   NetworkManager設定パスのPersistence機構そのものの確認にとどまる)。
+  2026-09-06の実USB/実機E2Eでも、NetworkManager設定パスが同一partitionから
+  マウントされることは確認したが、実際のWi-Fi SSID/パスワード登録から
+  再起動後の自動再接続までは未確認のまま(下記節を参照)。
 - 実機でのSecure Boot確認。
 - 未署名バイナリ拒否によるSecure Boot enforcementの実証。
 
@@ -1580,3 +1587,88 @@ BIOS検証用・UEFI検証用にそれぞれ個別のIMGを生成した(同一IM
 IMG 2本を削除済み。恒久VM(`mypocketos-test`・`mypocketos-uefi-test`)、
 および共有ISO・両VMの永続化ディスクを含むKEEP対象ディスクには変更を
 加えていない。
+
+### 実USB/実機E2E検証 (2026-09-06)
+
+上記VM実地検証に続き、同日2026-09-06に、実USBメモリへの書き込み・実機での
+起動E2Eを実施した。
+
+**検証対象**
+
+- IMG: `/var/tmp/mypocketos-standard-usb-persistence-20260906.img`
+  (検証後削除)
+  - サイズ: 3,939,475,456 bytes
+  - SHA-256: `cca50b545c94774e1938e397153117979773a6c1874098a5cece2977db0f27e0`
+  - 元ISO SHA-256: `04dd2ffee5991f8f8719cbd5f4b3445ea4f3788356bb5df9da3e0048d8999351`
+- 書き込み先実USB: MODEL `USB DISK 2.0`、SERIAL `071891876B260185`、
+  容量7.2G、`/dev/sdb`
+- 書き込みコマンド:
+  ```sh
+  sudo dd if=/var/tmp/mypocketos-standard-usb-persistence-20260906.img \
+      of=/dev/sdb bs=4M status=progress conv=fsync
+  ```
+  書き込みバイト数(3,939,475,456 bytes)はIMGサイズと一致。
+- 書き込み後のpartition構成: `sdb1` 1.7G iso9660(ボリュームラベル
+  `MyPocketOS 20260906-08:10`)、`sdb2` 3.3M vfat、`sdb3` 2G ext4
+  `persistence`。
+
+**実機USB Persistence E2E結果**
+
+- 実USBからMyPocketOSを起動し、`MyPocketOS Live (Persistence)`で起動。
+- `/proc/cmdline`に`boot=live`・`persistence`を確認。
+- `/home`が`/dev/sda3[/home]`(ext4)からマウントされることを確認。
+- `/etc/NetworkManager/system-connections`が
+  `/dev/sda3[/etc/NetworkManager/system-connections]`(ext4)から
+  マウントされることを確認。
+- `/home/user/usb-persistence-verify.txt`を作成し、
+  SHA-256(`55f9f61bd660c30dab6d85df7850c96402c772e2848a0da03220ed8991dc`)を
+  記録。
+- Persistenceモードで再起動後、同一SHA-256であることを確認(ファイル
+  保持を確認)。
+- Normal Liveへ切替後、`test -e "$HOME/usb-persistence-verify.txt"; echo $?`
+  が`1`(存在しない)であることを確認。
+- 再度Persistenceで起動すると、同一SHA-256でファイルが復活することを
+  確認。
+
+以上により、実USBメモリ経由での`/home` Persistenceが、
+Persistence → 再起動 → Normal Live → 再Persistenceという一連の流れで
+動作することを実機E2Eで確認した。
+
+**この検証で確認していない事項**
+
+- 今回の起動が実機のBIOS/UEFIいずれのファームウェアモードによるものかは
+  記録されておらず不明(推測で記載しない)。
+- NetworkManager設定パスがPersistence領域からマウントされることは確認
+  したが、実際のWi-Fi SSID/パスワードの登録・再起動後の自動再接続までは
+  未確認のまま。
+- 実機でのSecure Boot確認、および未署名バイナリ拒否によるSecure Boot
+  enforcementの実証(いずれも本検証の対象外)。
+
+### 既知の実機互換性問題: Intel UHD Graphics 620 (i915) + PSR (2026-09-06)
+
+上記実USB検証と同じ機会に、VAIO実機(Intel UHD Graphics 620
+`[8086:5917]`、`i915`ドライバ)で以下の表示問題を確認した。
+
+- 通常起動では、OS起動途中から縦線・表示乱れが発生する。
+- BIOS/UEFI設定画面自体は正常に表示される(ファームウェア・ディスプレイ
+  ケーブル自体の問題ではないと考えられる)。
+- カーネルパラメータ`nomodeset`を指定すると縦線は消えるが、GUIまでは
+  正常に起動しない。
+- カーネルパラメータ`i915.enable_psr=0`を追加すると、MyPocketOSおよび
+  比較のため試したPeppermint OSの両方で正常なGUI起動を確認した。
+
+以上から、この機種ではIntel UHD Graphics 620・`i915`ドライバ・内蔵液晶
+パネルのPSR (Panel Self Refresh) の組み合わせによる互換性問題である
+可能性が高いと考えている。回避策は次のとおり。
+
+```
+i915.enable_psr=0
+```
+
+**注意**:
+- ハードウェア故障とは断定しない(同一実機のBIOS/UEFI画面は正常表示)。
+- 全てのIntel内蔵グラフィックス機で発生するとは一般化しない(今回確認
+  したのはこの1機種のみ)。
+- 初回公開版において、この回避策を起動オプションへ恒久的に組み込むかは
+  未決定であり、現時点では未実装(手動でカーネルパラメータを追加する
+  必要がある)。

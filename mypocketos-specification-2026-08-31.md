@@ -104,6 +104,24 @@ MyPocketOSはDebian StableとOpenboxを基盤にした軽量ポータブルLinux
 
 注：同一USB Persistenceの実機E2Eには7.5GB USBを使用して成功しているが、公開時の最小USB容量表記は現時点では16GBのままとする。
 
+## 3.1 既知の実機互換性問題
+
+2026-09-06、VAIO実機(Intel UHD Graphics 620 `[8086:5917]`、`i915`
+ドライバ)で、通常起動時にOS起動途中から縦線・表示乱れが発生する事象を
+確認した。BIOS/UEFI設定画面自体は正常表示されるため、ファームウェアや
+ディスプレイケーブル自体の問題ではないと考えられる。`nomodeset`では
+縦線は消えるがGUIまでは正常起動しない。カーネルパラメータ
+`i915.enable_psr=0`を追加すると、MyPocketOS・比較対象のPeppermint OSの
+いずれも正常なGUI起動を確認した。
+
+このため、Intel UHD Graphics 620・`i915`ドライバ・内蔵液晶パネルのPSR
+(Panel Self Refresh)の組み合わせによる互換性問題である可能性が高いと
+考えている。ハードウェア故障とは断定せず、全てのIntel内蔵グラフィックス
+機で発生するとは一般化しない(今回確認したのはこの1機種のみ)。回避策
+(`i915.enable_psr=0`)を起動オプションへ恒久的に組み込むかは未決定であり、
+初回公開版での対応方針は未定のままとする。詳細はREADME「既知の実機
+互換性問題: Intel UHD Graphics 620 (i915) + PSR (2026-09-06)」節を参照。
+
 ---
 
 # 4. エディション
@@ -551,8 +569,17 @@ UEFIでのMode B作成後起動は未検証。
 BIOS/UEFI双方のVMで実地検証済み(Persistence起動・`/home`および
 NetworkManager設定パスのマウント・再起動後のデータ保持・Normal Liveとの
 分離を確認。詳細はREADME「現行(2行版)persistence.confでのVM実地検証
-(2026-09-06)」節参照)。実USBメモリへの書き込み・実機起動・実際のWi-Fi
-無線接続・Secure Boot enforcementの実証は未確認のまま残っている。
+(2026-09-06)」節参照)。
+
+同日2026-09-06、実USBメモリへの書き込み・実機起動E2Eも実施した。実USB
+(容量7.2G)への`dd`書き込み、実機での`MyPocketOS Live (Persistence)`
+起動、`/home`および`/etc/NetworkManager/system-connections`が同一
+partitionからマウントされること、テストファイルのPersistence再起動後の
+保持、Normal Liveでの非表示、再Persistenceでの復活を確認済み(詳細は
+README「実USB/実機E2E検証 (2026-09-06)」節参照)。ただし今回の起動が
+BIOS/UEFIいずれのファームウェアモードによるものかは記録されておらず
+不明であり、実際のWi-Fi無線接続・自動再接続、実機でのSecure Boot確認・
+enforcementの実証は引き続き未確認のまま残っている。
 
 ## 8.7 将来候補
 
