@@ -24,6 +24,7 @@ tests/desktop-polish/test_menu.sh
 tests/desktop-polish/test_icon_theme.sh
 tests/desktop-polish/test_fluent_archive.sh
 tests/desktop-polish/test_battery.sh
+tests/desktop-polish/test_touchpad.sh
 ```
 
 ## 内容
@@ -67,6 +68,17 @@ tests/desktop-polish/test_battery.sh
   `/sys/class/power_supply`を直接読み取り、バッテリー非搭載機では
   tint2自身がBattery項目を自動非表示にする設計のため、実バッテリーの
   有無に依存する動作そのものは実機/VM側での確認が必要(本テストの対象外)。
+- `test_touchpad.sh`: タッチパッド既定動作
+  (`/etc/X11/xorg.conf.d/51-mypocketos-touchpad.conf`)を確認する。
+  `MatchIsTouchpad "on"`を持つInputClassセクションが1つだけ存在し、その
+  セクション内で`Tapping`/`TappingButtonMap`/`TappingDrag`/`ScrollMethod`
+  が期待値どおり設定されていること、`MatchProduct`/`MatchVendor`/
+  `MatchUSBID`等のデバイス名・vendor IDのハードコードが無いこと、
+  `MatchIsPointer`/`MatchIsTouchscreen`/`MatchIsTablet`を持つ別セクション
+  には同じOptionを適用していないこと、`xserver-xorg-input-all`
+  (`xserver-xorg-input-libinput`への依存元)が既に共通パッケージリストに
+  含まれていることを静的に確認する。実Xorg・実libinput・実タッチパッドは
+  一切使用しない。
 
 ## production整合性への影響
 

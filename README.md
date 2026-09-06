@@ -305,6 +305,106 @@ HiDPI等を除いた派生サブセットです。** MyPocketOS独自のアイ�
 アーカイブは12,220ファイル・約57MB相当を単一tar.gzに圧縮したもので、
 リポジトリへのコミットサイズは展開状態より大幅に小さくなります。
 
+### タッチパッド既定動作 (2026-09-06)
+
+ノートPCで起動した直後から、一般的なタッチパッド操作を機種やタッチパッド
+製品名に依存せず使えるようにするため、libinputドライバ向けのXorg
+`InputClass`設定を追加しています。
+
+- 設定ファイル: `/etc/X11/xorg.conf.d/51-mypocketos-touchpad.conf`
+  (`config/includes.chroot/etc/X11/xorg.conf.d/51-mypocketos-touchpad.conf`
+  としてリポジトリに収録)。
+- 標準動作:
+  - 1本指タップ = 左クリック
+  - 2本指タップ = 右クリック
+  - 3本指タップ = libinput既定の`TappingButtonMap`(`lrm`)どおり中クリック
+  - 2本指スクロール
+  - タップ&ドラッグ(1本指タップ後そのまま指を置き続けるとドラッグ)
+  - 物理クリック(ボタン)は従来どおり使用可能
+- 設定したlibinputオプション: `Tapping "on"`・`TappingButtonMap "lrm"`・
+  `TappingDrag "on"`・`ScrollMethod "twofinger"`。
+- `InputClass`セクションは`MatchIsTouchpad "on"`(デバイス名・vendor ID
+  等のハードコードなし)でlibinputがタッチパッドと分類したデバイスにのみ
+  適用され、マウス・トラックポイント(pointing stick)・タッチスクリーン
+  には影響しません。
+- 既存の`xserver-xorg-input-all`パッケージ(`xserver-xorg-input-libinput`
+  への依存元、既存の共通パッケージリストに元々含まれている)をそのまま
+  利用しており、新規パッケージの追加は不要です。
+- xinputコマンドをOpenbox autostart等でログイン後に大量実行する方式では
+  なく、Xorg起動時に読み込まれる標準の`xorg.conf.d`スニペットのみで実現
+  しています。Openbox autostart (`~/.config/openbox/autostart`) 側の変更
+  はありません。
+- ファイル名は`51-`とし、`xserver-xorg-input-libinput`パッケージが提供する
+  既定の`/usr/share/X11/xorg.conf.d/40-libinput.conf`(`40-`)より後に
+  読み込まれるようにしています(Xorgは`xorg.conf.d`配下をファイル名順に
+  読み込み、後から読み込まれた`InputClass`の`Option`が同じデバイスに対して
+  優先されます)。
+- `tests/desktop-polish/test_touchpad.sh`で、上記オプションの値・
+  タッチパッド限定であること・デバイス名やvendor ID等のハードコードが
+  無いこと・他デバイスクラス(マウス等)へ誤適用されていないことを静的に
+  確認しています。
+
+**実機E2E検証 (2026-09-06)**: branch `feat/touchpad-defaults`
+(commit `23c946519b91e141de4bac46e7ef4e7b01a1ccc8`) のStandard版ISO
+(`mypocketos-standard-amd64.hybrid.iso`、SHA-256
+`07617844477ef74841d201392904b93f2ca60778d8a2e0a0bd5ac9ced704d8c9`、
+Volume ID `MyPocketOS 20260906-21:04`) を用いて、実機で1本指タップ
+(左クリック)・2本指タップ(右クリック)・2本指スクロール・タップ&ドラッグ・
+物理クリックがいずれも正常に動作することを確認しました。`/proc/bus/input/devices`
+では、対象タッチパッドが`ETPS/2 Elantech Touchpad`・`ELAN0902:00 04F3:3051
+Touchpad`としてカーネルに認識されていることを確認しました。また、USBマウス
+接続時の左クリック・右クリック・ホイールスクロールが正常であり、
+`MatchIsTouchpad "on"`による明らかなマウス側の副作用は確認されませんでした。
+一方、トラックポイント搭載機・Bluetoothマウスでの確認、`xinput
+list-props`によるlibinputプロパティの直接確認(`xinput`コマンド自体が
+MyPocketOSに未搭載のため今回未実施)は、いずれも未確認のまま残っています
+(詳細は「タッチパッド 実機E2E検証 (2026-09-06)」節を参照)。
+
+### タッチパッド 実機E2E検証 (2026-09-06)
+
+branch `feat/touchpad-defaults` (commit
+`23c946519b91e141de4bac46e7ef4e7b01a1ccc8`) のStandard版ISOを用いて、
+上記「タッチパッド既定動作」の実機E2Eを実施した。
+
+**検証対象ISO**
+
+- file: `mypocketos-standard-amd64.hybrid.iso`
+- size: 1,793,409,024 bytes
+- SHA-256: `07617844477ef74841d201392904b93f2ca60778d8a2e0a0bd5ac9ced704d8c9`
+- Volume ID: `MyPocketOS 20260906-21:04`
+
+**実機確認済み項目**
+
+- 1本指タップ → 左クリック: 正常。
+- 2本指タップ → 右クリック: 正常。
+- 2本指スクロール: 正常。
+- タップ&ドラッグ: 正常。
+- 物理クリック: 正常。
+- `/proc/bus/input/devices`で、対象タッチパッドが`ETPS/2 Elantech
+  Touchpad`・`ELAN0902:00 04F3:3051 Touchpad`としていずれも
+  input deviceとしてカーネルに認識されていることを確認した。
+- USBマウスを接続し、左クリック・右クリック・ホイールスクロールが
+  正常であることを確認した。`MatchIsTouchpad "on"`による明らかな
+  マウス側の副作用は確認されなかった。
+
+**この検証で確認していない事項 / 注意**
+
+- `xinput`コマンド自体がMyPocketOSに含まれておらず、実機での実行が
+  できなかった。今回の設定実装は`xinput`依存ではない(Xorg起動時に
+  読み込まれる`xorg.conf.d`スニペットのみで完結する)ため、これは
+  今回の実装の不具合ではない。評価は実機での操作確認と
+  `/proc/bus/input/devices`によるカーネル側認識確認によって行った。
+  `xinput list-props`によるlibinputプロパティ(`libinput Tapping
+  Enabled`等)の直接確認は未実施のまま残っている。
+- トラックポイント(pointing stick)搭載機での確認は今回実施していない。
+- Bluetoothマウスでの確認は今回実施していない。
+- 実機テスト中、一度動作が重くなった後の再起動時に、systemd-journaldの
+  `Failed to send WATCHDOG=1 notification message: Transport endpoint
+  is not connected`というメッセージが繰り返し表示され、再起動が停止する
+  事象が発生した。**この事象とタッチパッド設定との因果関係は今回
+  確認しておらず、本PRの不具合として断定しない。** 別件の調査項目として
+  記録するにとどめる。
+
 ## Live環境のログイン
 
 MyPocketOSのLive環境は、通常起動時にlive-configの自動ログイン機能により
