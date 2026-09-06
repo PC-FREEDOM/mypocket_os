@@ -342,9 +342,68 @@ HiDPI等を除いた派生サブセットです。** MyPocketOS独自のアイ�
 - `tests/desktop-polish/test_touchpad.sh`で、上記オプションの値・
   タッチパッド限定であること・デバイス名やvendor ID等のハードコードが
   無いこと・他デバイスクラス(マウス等)へ誤適用されていないことを静的に
-  確認しています。**この時点ではソースコードの静的確認・モックテストの
-  みが完了しており、実機・VMでのタップ操作の動作確認は未実施です**
-  (次回のVM/実機確認項目として別途記録します)。
+  確認しています。
+
+**実機E2E検証 (2026-09-06)**: branch `feat/touchpad-defaults`
+(commit `23c946519b91e141de4bac46e7ef4e7b01a1ccc8`) のStandard版ISO
+(`mypocketos-standard-amd64.hybrid.iso`、SHA-256
+`07617844477ef74841d201392904b93f2ca60778d8a2e0a0bd5ac9ced704d8c9`、
+Volume ID `MyPocketOS 20260906-21:04`) を用いて、実機で1本指タップ
+(左クリック)・2本指タップ(右クリック)・2本指スクロール・タップ&ドラッグ・
+物理クリックがいずれも正常に動作することを確認しました。`/proc/bus/input/devices`
+では、対象タッチパッドが`ETPS/2 Elantech Touchpad`・`ELAN0902:00 04F3:3051
+Touchpad`としてカーネルに認識されていることを確認しました。また、USBマウス
+接続時の左クリック・右クリック・ホイールスクロールが正常であり、
+`MatchIsTouchpad "on"`による明らかなマウス側の副作用は確認されませんでした。
+一方、トラックポイント搭載機・Bluetoothマウスでの確認、`xinput
+list-props`によるlibinputプロパティの直接確認(`xinput`コマンド自体が
+MyPocketOSに未搭載のため今回未実施)は、いずれも未確認のまま残っています
+(詳細は「タッチパッド 実機E2E検証 (2026-09-06)」節を参照)。
+
+### タッチパッド 実機E2E検証 (2026-09-06)
+
+branch `feat/touchpad-defaults` (commit
+`23c946519b91e141de4bac46e7ef4e7b01a1ccc8`) のStandard版ISOを用いて、
+上記「タッチパッド既定動作」の実機E2Eを実施した。
+
+**検証対象ISO**
+
+- file: `mypocketos-standard-amd64.hybrid.iso`
+- size: 1,793,409,024 bytes
+- SHA-256: `07617844477ef74841d201392904b93f2ca60778d8a2e0a0bd5ac9ced704d8c9`
+- Volume ID: `MyPocketOS 20260906-21:04`
+
+**実機確認済み項目**
+
+- 1本指タップ → 左クリック: 正常。
+- 2本指タップ → 右クリック: 正常。
+- 2本指スクロール: 正常。
+- タップ&ドラッグ: 正常。
+- 物理クリック: 正常。
+- `/proc/bus/input/devices`で、対象タッチパッドが`ETPS/2 Elantech
+  Touchpad`・`ELAN0902:00 04F3:3051 Touchpad`としていずれも
+  input deviceとしてカーネルに認識されていることを確認した。
+- USBマウスを接続し、左クリック・右クリック・ホイールスクロールが
+  正常であることを確認した。`MatchIsTouchpad "on"`による明らかな
+  マウス側の副作用は確認されなかった。
+
+**この検証で確認していない事項 / 注意**
+
+- `xinput`コマンド自体がMyPocketOSに含まれておらず、実機での実行が
+  できなかった。今回の設定実装は`xinput`依存ではない(Xorg起動時に
+  読み込まれる`xorg.conf.d`スニペットのみで完結する)ため、これは
+  今回の実装の不具合ではない。評価は実機での操作確認と
+  `/proc/bus/input/devices`によるカーネル側認識確認によって行った。
+  `xinput list-props`によるlibinputプロパティ(`libinput Tapping
+  Enabled`等)の直接確認は未実施のまま残っている。
+- トラックポイント(pointing stick)搭載機での確認は今回実施していない。
+- Bluetoothマウスでの確認は今回実施していない。
+- 実機テスト中、一度動作が重くなった後の再起動時に、systemd-journaldの
+  `Failed to send WATCHDOG=1 notification message: Transport endpoint
+  is not connected`というメッセージが繰り返し表示され、再起動が停止する
+  事象が発生した。**この事象とタッチパッド設定との因果関係は今回
+  確認しておらず、本PRの不具合として断定しない。** 別件の調査項目として
+  記録するにとどめる。
 
 ## Live環境のログイン
 
