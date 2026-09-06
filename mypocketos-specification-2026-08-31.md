@@ -438,9 +438,26 @@ GUI候補一覧(予備的)：
    行わない)
 1〜7. 上記と同一
 
-clean BIOS VMでE2E検証済み(完全未使用ディスクの経路)。既存partitionあり
-ディスクの経路は非破壊モックテストのみで検証済みであり、VM/実機での
-実地検証は未実施(仕様書16節参照)。
+clean BIOS VMでE2E検証済み(完全未使用ディスクの経路)。
+
+既存partitionありディスクの経路は、2026-09-06、branch
+`fix/mode-a-existing-partition-candidates`(commit
+`29cfcd825bc5073bd51f5abe5d206b16df4478dc`)のStandard版ISO
+(`mypocketos-standard-amd64.hybrid.iso`、SHA-256
+`92941882720b5e5dba927adcee8aecd12bdd70b0301d29cbfa5c89a4cb7b3158`)で
+実機E2E検証を実施した。実機のMode A対象USB(Debian trixie ISOを書き込み
+済み、iso9660+vfatの既存partitionあり)を用いて、候補表示・内蔵NVMeの
+候補除外・既存データ消去警告・ERASE type-to-confirm・既存partition/
+signatureの`wipefs -a`消去・GPT/partition/ext4作成・Persistence起動・
+`/home`永続化・NetworkManager設定永続化・再起動保持・Normal Liveでの
+非表示・再Persistenceでの復活までを確認した(詳細はREADME「Mode A
+既存partitionあり外付けUSB 実機E2E検証(2026-09-06)」節参照)。ただし、
+helper内部の個々のコマンド(`wipefs`/`parted`/`mkfs.ext4`)の実行を実機で
+個別にトレースしたわけではなく、GUIの成功表示と最終成果物・Persistence
+挙動から処理全体の成功を確認したものである。署名・mount・swap・holders
+等の個々の拒否条件(終了コード14/17/18等)を実ブロックデバイスで個別に
+確認する実機試験、およびUEFI/Secure Boot環境での本経路の確認は、
+引き続き未実施のまま残っている(仕様書16節参照)。
 
 ## 8.4 Mode B：MyPocketOS起動USB自身の末尾未使用領域
 
@@ -832,7 +849,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - 最低RAM
 - 必要に応じDebian Installer E2E
 - Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02、USB persistence IMG経由は2026-09-06に実機確認済み。Mode A経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
-- Mode A(既存partionを持つ外付けUSBの安全な初期化、2026-09-06拡張)のVM/実機動作確認(非破壊モックテストのみで検証済み。実際のGPT作成・署名消去・persistence作成までの一連の流れは未確認のまま、8.3節参照)
+- Mode A(既存partionを持つ外付けUSBの安全な初期化、2026-09-06拡張)の実機E2E(候補表示から作成・Persistence起動・再起動保持までの一連の流れは2026-09-06に実機確認済み。ただしhelper内部コマンドの個別トレース、署名・mount・swap・holders等の個々の拒否条件を実ブロックデバイスで確認する実機試験、UEFI/Secure Boot環境での確認は未実施のまま、8.3節参照)
 
 ## 16.3 配布仕様
 

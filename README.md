@@ -694,7 +694,11 @@ UEFI版VM (`mypocketos-uefi-test`, OVMFによる64-bit UEFI起動) でも、同�
   UEFI版の双方の使い捨てテストVMを用いて確認済みです (詳細は「GUIに
   よる永続領域作成 (実装仕様)」節の「動作確認」を参照)。署名・mount・
   swap・holders等の各拒否条件を個別の実ブロックデバイスで確認する
-  実機試験は未確認です。
+  実機試験は未確認です。ただし、既存partitionを持つ外付けUSBを対象と
+  したMode A許可パス全体 (候補表示→内蔵ディスク除外→既存データ消去
+  警告→ERASE確認→既存partition/signature消去→作成→Persistence起動) は
+  2026-09-06に実機で確認済みです (詳細は「Mode A 既存partitionあり
+  外付けUSB 実機E2E検証 (2026-09-06)」節を参照)。
 - LUKSによる暗号化は未実装です。
 - 追加インストールしたアプリ本体、パッケージ一覧、APTキャッシュの
   永続化は未実装です。
@@ -728,6 +732,11 @@ UEFI版使い捨てテストVM `mypocketos-persistence-gui-uefi-test`
 
 - 署名・mount・swap・holders等、各拒否条件を個別の実ブロックデバイスを
   追加して確認する実機試験 (これらは非破壊モックテストでは確認済み)。
+  ただし、既存partitionを持つ外付けUSBを対象としたMode A許可パス全体
+  (候補表示から作成・Persistence起動までの一連の流れ) は2026-09-06に
+  実機で確認済みである (詳細は「Mode A 既存partitionあり外付けUSB
+  実機E2E検証 (2026-09-06)」節を参照。個々の拒否条件を実ブロック
+  デバイスで個別に確認する実機試験は引き続き未実施)。
 - 専用UEFI VMでのSecure Boot有効状態 (`mokutil`未搭載のため未確認。
   UEFI起動自体は確認済み)。
 
@@ -1301,12 +1310,96 @@ TPMは接続なし) を用意して使用した。いずれのVMにも次のみ�
 
 - 署名・mount・swap・holders等、各拒否条件を個別の実ブロックデバイスを
   追加して確認する実機試験 (これらは非破壊モックテストでは確認済み)。
+  既存partitionを持つ外付けUSBを対象としたMode A許可パス全体について
+  のみ、下記「Mode A 既存partitionあり外付けUSB 実機E2E検証
+  (2026-09-06)」節で別途実機確認済みである。
 - 専用UEFI VMでのSecure Boot有効状態 (`mokutil`未搭載のため未確認。
   UEFI起動自体は確認済み)。
 - LUKSによる暗号化、部分的な空き領域を利用した永続化、既存永続領域の
   変更、複数の永続領域の作成・切り替え、`/home`以外の永続化、追加
   インストールしたアプリ本体の永続化 (いずれも「初版のスコープ外」節
   参照)。
+
+#### Mode A 既存partitionあり外付けUSB 実機E2E検証 (2026-09-06)
+
+branch `fix/mode-a-existing-partition-candidates`
+(commit `29cfcd825bc5073bd51f5abe5d206b16df4478dc`) のStandard版ISOを
+用いて、既存partition/signatureを持つ外付けUSBに対するMode A新設
+許可パスの実機E2Eを実施した。
+
+**検証対象ISO**
+
+- file: `mypocketos-standard-amd64.hybrid.iso`
+- size: 1,793,409,024 bytes
+- SHA-256: `92941882720b5e5dba927adcee8aecd12bdd70b0301d29cbfa5c89a4cb7b3158`
+- Volume ID: `MyPocketOS 20260906-19:28`
+
+**実機構成**
+
+- MyPocketOS起動USB: MODEL `USB DISK 2.0`、SERIAL `071891876B260185`、
+  7.2G。
+- Mode A対象USB: MODEL `USB Flash Disk`、SERIAL `07080A7474AB4873`、
+  7.4G。事前状態としてDebian trixie ISOを書き込み済みで、
+  iso9660+vfatの既存partitionがある状態。
+- 内蔵ディスク: KLEVV NVMe、238.5G (Mode A対象にしてはならないもの)。
+
+**確認した内容**
+
+1. MyPocketOS Liveを通常起動し、lsblkで起動USB (`MyPocketOS
+   20260906-19:28`)・Mode A対象USB (Debian trixie既存partitionあり)・
+   内蔵NVMeの構成を確認した。
+2. Persistence GUIの候補一覧に、`/dev/sdb` (USB Flash Disk、
+   SERIAL `07080A7474AB4873`、7.4 GiB) がMode A候補として表示された。
+   MyPocketOS起動USBは既存の特別項目として表示され、内蔵NVMeは候補
+   一覧に表示されなかった。
+3. `/dev/sdb`を選択して次へ進むと、「このディスクには既存のデータ・
+   パーティションがあります。続行すると、それらはすべて消去されます。」
+   相当の明確な破壊確認が表示された。
+4. type-to-confirm欄に`ERASE /dev/sdb`を正確に入力した。
+5. GUIで「永続領域の作成に成功しました。」を確認した。既存partitionを
+   持つ外付けUSBからのMode A作成が実機で成功した。
+6. MyPocketOS Live (Persistence)で再起動し、`findmnt --target /home`が
+   `/dev/sda1[/home]` (ext4)、`findmnt --target
+   /etc/NetworkManager/system-connections`が同一partition・ext4である
+   ことを確認した。
+7. `$HOME/mode-a-verify.txt`
+   (内容: `MyPocketOS Mode A physical test 2026-09-06`、SHA-256
+   `5177690d21b9ade0ffcb4dfae3dd4b539d5c8eca57e2f483ab617b472eaa0771`)
+   を作成した。
+8. Persistenceモードで再起動後、同一SHA-256であることを確認した
+   (ファイル保持を確認)。
+9. Normal Liveへ切替後、
+   `test -e "$HOME/mode-a-verify.txt"; echo $?`が`1` (存在しない) で
+   あることを確認した。
+10. 再度Persistenceへ切替後、同一SHA-256でファイルが復活することを
+    確認した。
+
+以上により、既存partition/signatureを持つ外付けUSBからのMode A作成が、
+候補表示・内蔵NVMeの候補除外・既存データ消去警告・ERASE確認・既存
+partition/signature消去・GPT/partition/ext4によるPersistence作成・
+Persistence起動・`/home` Persistence・NetworkManager設定Persistence・
+Persistence再起動保持・Normal Liveでの非表示・再Persistenceでの復活
+という一連の流れで動作することを、2026-09-06に実機E2Eで確認した。
+
+**この検証で確認していない事項 / 注意**
+
+- 実機でhelper内部の各コマンド (`wipefs`/`parted`/`mkfs.ext4`) を
+  個別にトレースしたわけではない。GUIの成功表示と、最終的なMode A
+  成果物・Persistence挙動から、処理全体としての成功を確認したもので
+  ある。
+- 署名・mount・swap・holders等、既存partition配下の個々の拒否条件
+  (exit 14/17/18等) を実ブロックデバイスで個別に確認する実機試験は、
+  引き続き未実施である (非破壊モックテストでは確認済み)。
+- 今回の起動がBIOS/UEFIいずれのファームウェアモードによるものかは
+  明示的に確認しておらず、推測では記載しない。
+- 実機でのSecure Boot確認は行っていない。
+- Mode A経由の実Wi-Fi SSID登録から再起動後の自動再接続までの確認、
+  および複数Wi-Fiプロファイルの確認は、今回実施していない (「Mode B
+  Wi-Fi Persistence 実機E2E検証 (2026-09-02)」・「USB persistence IMG
+  経由の実Wi-Fi接続E2E検証 (2026-09-06)」節はMode B/USB persistence
+  IMG経由の検証であり、本節の対象ではない)。
+- UEFI / Secure Boot環境での、既存partitionを持つ外付けUSBに対する
+  Mode Aの確認は未実施のままである。
 
 #### Mode B Wi-Fi Persistence 実機E2E検証 (2026-09-02)
 
