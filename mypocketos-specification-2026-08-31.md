@@ -223,7 +223,7 @@ Baseとの差：
 | ネットワーク | NetworkManager | 実装済み |
 | 音声 | PipeWire／WirePlumber＋pasystray | 実装済み |
 | パッケージ管理 | APT（CLI。Synaptic等GUIフロントエンドは未搭載） | 実装済み |
-| 追加アプリ導入 | Flatpak（`flatpak --user`推奨） | 実装済み |
+| 追加アプリ導入 | Flatpak（`flatpak --user`推奨） | 実装済み（実機E2E確認済み、8.1節参照） |
 
 ## 5.1 UI原則
 
@@ -350,6 +350,8 @@ README.mdの該当節を参照）。
 | `/ union` | 採用しない |
 
 Wi-Fi／NetworkManager設定のPersistenceは実装済み。2026-09-02、Mode B(同一起動USB)・実機・Legacy/UEFI未特定の環境で、Persistence起動時のWi-Fi再起動後自動接続・`/etc/NetworkManager/system-connections`のPersistenceマウント・接続プロファイルの`root:root`/`0600`・Normal Liveでの非表示・`/home`保持への非回帰を確認済み(詳細は17節)。Mode A・USB persistence IMG経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルでの動作は未確認のまま残っている。認証情報が無暗号化のまま保存される点の注意は14節を参照。
+
+`flatpak --user`(5節「追加アプリ導入」参照)によるアプリ本体・ランタイム・remote設定・アプリ設定/データも、いずれも`/home`配下に保存されるため既存のPersistenceでそのまま保持される設計であり、実機のMode B Persistence環境でE2E確認済みである(Flathub remoteの手動登録・mpvのインストール・Persistence再起動後の保持・Normal Liveでの非表示・再Persistenceでの復活を確認。詳細はREADME「Flatpak Persistence 実機/VM E2E確認」節参照)。APTで追加したパッケージ本体そのものの永続化は、上記表「非保存」のとおり初回版では引き続き対象外である。
 
 ## 8.2 Persistence Setup
 

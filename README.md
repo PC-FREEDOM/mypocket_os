@@ -161,10 +161,35 @@ Base版・Standard版のいずれにも`flatpak`コマンドを標準搭載し�
 - gnome-software等のGUIソフトウェアセンターは含めていません。
 - `flatpak --user`でインストールしたアプリ・ランタイム・remote設定・
   ユーザーデータ(`~/.var/app/`)は、いずれも`/home`配下に保存されるため、
-  既存のPersistence(`/home`)機能でそのまま永続化されます(実機確認手順は
-  今後別途実施予定)。
+  既存のPersistence(`/home`)機能でそのまま永続化されます。**実機E2Eで
+  確認済み**(下記「Flatpak Persistence 実機/VM E2E確認」節を参照)。
 - APTで追加したパッケージ本体そのものの永続化は、初回版では対象外です
   (Live起動のたびにリセットされます)。
+
+#### Flatpak Persistence 実機/VM E2E確認
+
+VM・実機いずれのNormal Live環境でも`flatpak --version`(Flatpak 1.16.6)・
+`flatpak --user remotes`(空)を確認し、Flathub等のremoteが自動登録されて
+いないことを確認した。
+
+実機のMode B Persistence環境で、次を確認した。
+
+- Wi-Fi接続後、
+  `flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`
+  でFlathubをユーザーremoteとして登録できること。
+- `flatpak --user install --assumeyes flathub io.mpv.Mpv`でmpvを
+  インストールでき、jgmenuに表示され、GUIから起動できること。
+- Persistenceモードで再起動した後もmpvが起動でき、`flatpak --user list`
+  でmpv本体とランタイムが確認できること。
+- Normal Liveへ切り替えると、`flatpak --user list`が空になり、
+  `~/.local/share/flatpak`・`~/.var/app`がいずれも存在しないこと
+  (Persistenceへの非依存が保たれていることの確認)。
+- 再度Persistenceへ戻すと、mpv本体・ランタイムが再表示され、起動できる
+  こと。
+
+以上により、`flatpak --user`でインストールしたアプリ本体・ランタイム・
+remote設定・アプリ設定/データが、いずれも`/home` Persistenceで保持
+されることを実機E2Eで確認済みである。
 
 **実測ISOサイズ**
 
