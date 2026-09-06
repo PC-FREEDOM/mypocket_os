@@ -544,6 +544,14 @@ UEFIでのMode B作成後起動は未検証。
 - 生成物はGit管理しない
 - 公開用Persistence容量は2GiBを第一候補
 
+2026-09-06、現行(2行版)`persistence.conf`(`/home`と
+`/etc/NetworkManager/system-connections`)を持つ本スクリプトの成果物を
+BIOS/UEFI双方のVMで実地検証済み(Persistence起動・`/home`および
+NetworkManager設定パスのマウント・再起動後のデータ保持・Normal Liveとの
+分離を確認。詳細はREADME「現行(2行版)persistence.confでのVM実地検証
+(2026-09-06)」節参照)。実USBメモリへの書き込み・実機起動・実際のWi-Fi
+無線接続・Secure Boot enforcementの実証は未確認のまま残っている。
+
 ## 8.7 将来候補
 
 - LUKS暗号化
