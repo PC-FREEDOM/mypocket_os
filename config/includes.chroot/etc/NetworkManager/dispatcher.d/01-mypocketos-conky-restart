@@ -1,0 +1,82 @@
+#!/bin/sh
+#
+# MyPocketOS - NetworkManager dispatcher: 接続確立時にConkyを再起動する
+#
+# 背景 (2026-09-07、3度目の実機不具合修正):
+# Conkyのネットワーク表示 (${downspeed ${gw_iface}}/${upspeed ${gw_iface}}、
+# 取得ロジック自体は実機で正常動作を確認済み) が、実機では起動直後
+# Wi-Fi接続後・通信中でもDown/Upが常に0Bのまま変化しない不具合が確認
+# された。実機での切り分けにより、原因はネットワーク取得ロジックでは
+# なく、Conkyがネットワーク接続前に起動した場合、そのConkyプロセスの
+# 生存中はネットワークデバイスの内部状態が更新されず、後から接続しても
+# 反映されないという、Conky自身の起動タイミング/初期化の問題であると
+# 判明した。実機で、稼働中のConkyプロセスを完全終了させてから再起動
+# すると正しく動作することを確認済み。
+#
+# 対応方針: Conky側の取得ロジックはこれ以上複雑化せず、「ネットワーク
+# 接続が確立した」タイミングでConkyを1回再起動するだけに留める。
+# NetworkManagerは接続状態が変化するたびに、dispatcher.d配下の実行可能
+# スクリプトを"INTERFACE ACTION"という2引数でroot権限から呼び出す
+# (man NetworkManager(8) "Dispatcher scripts")。本スクリプトは、この
+# イベント駆動の仕組みだけに依存し、毎秒のポーリング・新規の常駐
+# watchdog・新規systemdサービスは一切追加しない。特定のネットワーク
+# インターフェース名 ($1) は判定に使用しない (どのインターフェースが
+# upしても同じ処理を行う)。
+#
+# 稼働中のConkyプロセス自身の環境 (DISPLAY・XAUTHORITY・HOME) を
+# /proc/<pid>/environ から読み取って再現するため、DISPLAY等を
+# 固定文字列でハードコードしない。MyPocketOS Live環境のユーザー名は
+# 既存のREADME (「GUIによる永続領域作成」節) でも前提としている
+# 固定のLiveユーザー`user`のみを対象とする。
+#
+set -eu
+
+ACTION="${2:-}"
+
+# 接続が確立した("up")場合のみ処理する。切断時 (down等) は、Conky側の
+# ${if_match "${gw_iface}" != "none"}が毎更新サイクルで正しく「未接続」
+# へ切り替わるため、再起動は不要。
+[ "${ACTION}" = "up" ] || exit 0
+
+LIVE_USER="user"
+
+# 対象ユーザーで稼働中のconkyプロセスが無ければ何もしない
+# (まだ起動シーケンスでConkyが起動していない、またはユーザーが手動で
+# 終了させている場合等はそのまま関与しない)。
+CONKY_PID="$(pgrep -u "${LIVE_USER}" -x conky 2>/dev/null | head -n1)" || true
+[ -n "${CONKY_PID}" ] || exit 0
+
+ENVIRON_FILE="/proc/${CONKY_PID}/environ"
+[ -r "${ENVIRON_FILE}" ] || exit 0
+
+# 稼働中のConky自身が実際に使っているDISPLAY/XAUTHORITY/HOMEをそのまま
+# 再利用する (推測・ハードコードしない)。
+CONKY_DISPLAY="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n 's/^DISPLAY=//p' | head -n1)"
+CONKY_XAUTHORITY="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n 's/^XAUTHORITY=//p' | head -n1)"
+CONKY_HOME="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n 's/^HOME=//p' | head -n1)"
+
+# DISPLAYが取得できない場合は、どこにも再起動できないため何もしない
+# (fail-close。誤ったDISPLAYを推測して起動を試みない)。
+[ -n "${CONKY_DISPLAY}" ] || exit 0
+
+kill "${CONKY_PID}" 2>/dev/null || true
+
+# -U (--unique) は「既に別のConkyプロセスが起動していれば新規起動を
+# 拒否する」動作のため、旧プロセスの終了を待たずに再起動を試みると
+# 新しいConkyが起動できず、Conky自体が消えたままになる。プロセスが
+# 実際に終了するまで短時間 (最大2秒) 待ってから再起動する。
+i=0
+while [ "${i}" -lt 10 ]; do
+	kill -0 "${CONKY_PID}" 2>/dev/null || break
+	sleep 0.2
+	i=$((i + 1))
+done
+
+set -- env "DISPLAY=${CONKY_DISPLAY}"
+[ -z "${CONKY_XAUTHORITY}" ] || set -- "$@" "XAUTHORITY=${CONKY_XAUTHORITY}"
+[ -z "${CONKY_HOME}" ] || set -- "$@" "HOME=${CONKY_HOME}"
+set -- "$@" conky -p 3 -U
+
+runuser -u "${LIVE_USER}" -- "$@" >/dev/null 2>&1 &
+
+exit 0

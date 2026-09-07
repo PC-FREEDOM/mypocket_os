@@ -26,6 +26,7 @@ tests/desktop-polish/test_fluent_archive.sh
 tests/desktop-polish/test_battery.sh
 tests/desktop-polish/test_touchpad.sh
 tests/desktop-polish/test_conky_display.sh
+tests/desktop-polish/test_conky_network_restart.sh
 ```
 
 ## 内容
@@ -96,6 +97,24 @@ tests/desktop-polish/test_conky_display.sh
   ショートカットの後に区切り線・見出し付きで追加されていること、
   ネットワーク監視用の新規パッケージ依存が追加されていないことを
   静的に確認する。実Conky・実Xは一切使用しない。
+- `test_conky_network_restart.sh`: NetworkManager dispatcher
+  (`config/includes.chroot/etc/NetworkManager/dispatcher.d/
+  01-mypocketos-conky-restart`)を確認する。`action=up`(接続確立)の
+  場合にのみ動作すること、対象ユーザー(固定のLiveユーザー`user`)の
+  既存Conkyプロセスを`pgrep`で見つけること、DISPLAY/XAUTHORITYを
+  そのConky自身の`/proc/<pid>/environ`から読み取り(ハードコードしない
+  こと)、旧プロセスの終了を待ってから(無期限ループではない、上限付き
+  ループで)`runuser`経由で同じユーザー・同じ環境で再起動すること、
+  特定インターフェース名を判定に使っていないこと、毎秒のポーリング・
+  常駐watchdog・新規systemdサービス/cronを追加していないことを静的に
+  確認したうえで、モック`pgrep`/`runuser`と実プロセス・実
+  `/proc/<pid>/environ`を使って、次を機能的に検証する:
+  (1) 接続確立時に対象プロセスがkillされ、`runuser`が recovered
+  DISPLAY/XAUTHORITY/HOMEと`conky -p 3 -U`で正しく1回呼ばれること、
+  (2) 切断時 (`action=down`) は何もしないこと、(3) 対象プロセスが
+  存在しない場合は何もしないこと、(4) DISPLAYを取得できない場合は
+  fail-closeで再起動を試みず、既存プロセスにも触れないこと。実root権限・
+  実conky・実NetworkManagerは一切使用しない。
 
 ### ネットワーク表示の実装経緯 (2026-09-06〜2026-09-07)
 
@@ -111,7 +130,7 @@ tests/desktop-polish/test_conky_display.sh
    Lua関数内で`conky_parse()`を再帰的に呼ぶことが、Conkyのネットワーク
    統計の内部状態と競合することが、実際のconky-std 1.22.1バイナリでの
    検証により判明した)。
-3. **2026-09-07 2nd fix (現行)**: `mypocketos-network.lua`を廃止し、
+3. **2026-09-07 2nd fix**: `mypocketos-network.lua`を廃止し、
    `${downspeed ${gw_iface}}`/`${upspeed ${gw_iface}}`という、Conky変数
    の引数へ別のConky変数を直接ネストさせる記法のみで実装。この記法は
    Conky公式ドキュメントには明記されていないが、実際にビルド済み
@@ -119,7 +138,21 @@ tests/desktop-polish/test_conky_display.sh
    `out_to_x=false`・`out_to_console=true`の一時設定、複数回の更新
    サイクル)で、`${downspeed ${gw_iface}}`が固定インターフェース名を
    指定した場合と常に同一の値を返し、実際の通信量の増減を正しく反映
-   することを確認した。
+   することを確認した。→取得ロジック自体は解決したが、実機の再確認で
+   別の症状(起動直後・Wi-Fi接続後・通信中でもDown/Upが0Bのまま)が
+   判明した。
+4. **2026-09-07 3rd fix (現行)**: 実機での追加切り分けにより、
+   `${gw_iface}`/`${downspeed ${gw_iface}}`/`${upspeed ${gw_iface}}`は
+   単体では実機でも正常動作すること、しかし**Conkyがネットワーク接続
+   確立前に起動していると、そのConkyプロセスの生存中はネットワーク
+   デバイスの内部状態が更新されず、後から接続してもDown/Upが0Bのまま
+   変化しない**ことが実機で確認された(稼働中のConkyを完全終了させて
+   から再起動すると正しく動作することも確認済み)。ネットワーク取得
+   ロジック自体(`conky.conf`)はこれ以上変更せず、NetworkManagerの
+   接続確立イベント(`up`)のたびにConkyを再起動する
+   `config/includes.chroot/etc/NetworkManager/dispatcher.d/
+   01-mypocketos-conky-restart`を新規追加した。詳細は
+   `test_conky_network_restart.sh`の項を参照。
 
 ### `optional_conky_runtime_smoke.sh` (オプション、非必須)
 
@@ -148,6 +181,13 @@ HOME・一時設定(`out_to_x=false`・`out_to_console=true`・
   Git管理外のパッケージキャッシュ)の.debから一時ディレクトリへ
   展開して(`dpkg-deb -x`、システムへのインストール・sudoは一切
   使わない)実行を試みる。
+- **3回目の不具合(Conkyの起動タイミング/初期化問題、後述)の再現・
+  検出はこのスクリプトには含めていない。** 実際のNetworkManager接続
+  状態遷移(未接続→接続確立)を必要とし、ヘッドレスな一時プロセス実行
+  だけでは安全に再現できないため。この不具合への対応
+  (`01-mypocketos-conky-restart`)自体の検証は
+  `test_conky_network_restart.sh`(モック`pgrep`/`runuser` + 実プロセス/
+  実`/proc/<pid>/environ`)で行っている。
 
 手動実行方法:
 

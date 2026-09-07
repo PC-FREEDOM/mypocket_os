@@ -15,6 +15,19 @@
 # 初めて分かる」問題を検出できないため、可能な範囲でこのオプション
 # テストを追加する。
 #
+# 【検討したが自動化しなかった項目】3回目の不具合 (Conkyがネットワーク
+# 接続確立前に起動していると、そのプロセスの生存中はDown/Upが0Bのまま
+# 変化しない) の再現・検出は、実際のNetworkManager接続状態遷移
+# (未接続→接続確立) を必要とし、CI・本スクリプトのようなヘッドレスな
+# 一時プロセス実行だけでは安全に再現できないため、本スクリプトには
+# 含めていない。この不具合への対応
+# (config/includes.chroot/etc/NetworkManager/dispatcher.d/
+# 01-mypocketos-conky-restart) の検証は、
+# tests/desktop-polish/test_conky_network_restart.shで、モック
+# pgrep/runuser + 実プロセス/実/proc/<pid>/environを使って行っている
+# (dispatcherスクリプト自体の再起動ロジックを検証するものであり、
+# 実際のNetworkManager接続イベントは使わない)。
+#
 # 【重要】このテストは4つの必須ローカルテストスイート
 # (tests/persistence, tests/edition-build, tests/desktop-polish,
 # tests/usb-persistence-image) の一部ではなく、
