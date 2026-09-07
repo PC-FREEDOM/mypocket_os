@@ -84,15 +84,76 @@ tests/desktop-polish/test_conky_display.sh
   (`~/.config/conky/conky.conf`)の表示内容を確認する。既存表示項目
   (MyPocketOS見出し・ホスト名・カーネル・稼働時間・起動モード・
   CPU使用率とバー・メモリとバー・ルートFSとバー・既存ショートカット
-  5項目)がいずれも削除・置換されていないこと、新規追加した
-  ネットワーク表示(`${if_gw}`による接続判定、`${downspeed}`/
-  `${upspeed}`によるDown/Up速度、未接続時は「未接続」表示)が
-  特定インターフェース名(`wlan0`/`eth0`等)をハードコードしていない
-  こと、`${exec`系変数(exec/execi)が追加されていないこと、新規追加した
-  ウィンドウスナップ表示4項目(Super+Left/Right/Up/Down)が既存
+  5項目)がいずれも削除・置換されていないこと、ネットワーク表示
+  (`${if_match "${gw_iface}" != "none"}`とその入れ子による接続判定、
+  `${downspeed ${gw_iface}}`/`${upspeed ${gw_iface}}`によるDown/Up速度。
+  2026-09-07時点の実装、詳細は後述)が特定インターフェース名
+  (`wlan0`/`eth0`等)をハードコードしていないこと、`${exec`系変数
+  (exec/execi)が追加されていないこと、過去2回の不具合版の実装
+  (引数なし`${downspeed}`/`${upspeed}`、および廃止した
+  `mypocketos-network.lua`経由のLua実装)に戻っていないこと、新規追加
+  したウィンドウスナップ表示4項目(Super+Left/Right/Up/Down)が既存
   ショートカットの後に区切り線・見出し付きで追加されていること、
   ネットワーク監視用の新規パッケージ依存が追加されていないことを
   静的に確認する。実Conky・実Xは一切使用しない。
+
+### ネットワーク表示の実装経緯 (2026-09-06〜2026-09-07)
+
+1. **2026-09-06導入**: 引数なし`${downspeed}`/`${upspeed}`(Conky内部の
+   デバイス自動選択に委ねる方式)+`${if_gw}`。→実機で、Wi-Fi通信中でも
+   Down/Upが常に0Bのままになる不具合が判明(Conkyの自動選択がdefault
+   route interfaceと異なるデバイスを選んでいた)。
+2. **2026-09-07 1st fix**: `mypocketos-network.lua`を追加し、Conky公式
+   Lua API `conky_parse()`で`${gw_iface}`を取得してから
+   `${downspeed IFACE}`/`${upspeed IFACE}`を組み立てる方式。→実機で
+   `attempt to call a nil value`というLua実行時エラーが発生し、ラベル
+   だけ表示され値が空欄になる不具合が判明(`${lua ...}`から呼ばれる
+   Lua関数内で`conky_parse()`を再帰的に呼ぶことが、Conkyのネットワーク
+   統計の内部状態と競合することが、実際のconky-std 1.22.1バイナリでの
+   検証により判明した)。
+3. **2026-09-07 2nd fix (現行)**: `mypocketos-network.lua`を廃止し、
+   `${downspeed ${gw_iface}}`/`${upspeed ${gw_iface}}`という、Conky変数
+   の引数へ別のConky変数を直接ネストさせる記法のみで実装。この記法は
+   Conky公式ドキュメントには明記されていないが、実際にビルド済み
+   conky-std 1.22.1バイナリ(`chroot/usr/bin/conky`、
+   `out_to_x=false`・`out_to_console=true`の一時設定、複数回の更新
+   サイクル)で、`${downspeed ${gw_iface}}`が固定インターフェース名を
+   指定した場合と常に同一の値を返し、実際の通信量の増減を正しく反映
+   することを確認した。
+
+### `optional_conky_runtime_smoke.sh` (オプション、非必須)
+
+上記2回の不具合はいずれも「静的テストはPASSしていたが、実際にConkyの
+プロセス内で実行すると失敗する」という種類の問題だった。この種の
+問題を可能な範囲で機械的に検出するため、実conkyバイナリを一時
+HOME・一時設定(`out_to_x=false`・`out_to_console=true`・
+`total_run_times=3`)でヘッドレスに実行し、Lua実行時エラー
+(`attempt to call a nil value`等)が出ていないこと、既存表示項目・
+ネットワーク表示・ウィンドウスナップ表示が実際にレンダリングされる
+こと、Down:/Up:のラベルの後に値が空欄のまま残っていないこと(または
+「未接続」表示になっていること)を確認するオプションスクリプトを
+追加した。
+
+- **4つの必須ローカルテストスイートには含まれていない**
+  (`tests/persistence`・`tests/edition-build`・`tests/desktop-polish`
+  ・`tests/usb-persistence-image`のいずれでもない)。
+- `tests/desktop-polish/run.sh`からは呼び出されない。CI
+  (`.github/workflows/`)からも実行されない。
+- 実conkyバイナリが必要。CI環境や素の`git checkout`直後には
+  `chroot/`(ビルド生成物、Git管理外)が存在しないため、その場合は
+  何もエラーにせず`SKIP`して終了する(exit 0)。
+- ローカルで`./scripts/build.sh`を実行済みの場合、
+  `chroot/usr/bin/conky`と、不足する共有ライブラリ
+  (`liblua5.3-0`・`libimlib2t64`)を`cache/packages.chroot/`(同じく
+  Git管理外のパッケージキャッシュ)の.debから一時ディレクトリへ
+  展開して(`dpkg-deb -x`、システムへのインストール・sudoは一切
+  使わない)実行を試みる。
+
+手動実行方法:
+
+```sh
+tests/desktop-polish/optional_conky_runtime_smoke.sh
+```
 
 ## production整合性への影響
 
