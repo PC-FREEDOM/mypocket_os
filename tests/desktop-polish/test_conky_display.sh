@@ -3,13 +3,16 @@
 # Conky表示 (システム情報パネル) に対する静的テスト。
 # 既存表示項目 (MyPocketOS見出し・ホスト名・カーネル・稼働時間・
 # 起動モード・CPU使用率・メモリ・ルートFS・既存ショートカット5項目) が
-# 維持されていること、新規追加したネットワーク表示・ウィンドウスナップ
-# 表示が期待どおりであることを確認する。実Conky・実Xは一切使用しない。
+# 維持されていること、ネットワーク表示 (mypocketos-network.lua経由、
+# default route interfaceを${gw_iface}から動的に取得する実装。
+# 2026-09-07修正)・ウィンドウスナップ表示が期待どおりであることを
+# 確認する。実Conky・実Xは一切使用しない。
 #
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CONKY_CONF="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/conky/conky.conf"
+NETWORK_LUA="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/conky/mypocketos-network.lua"
 
 PASS=0
 FAIL=0
@@ -89,43 +92,108 @@ check "existing: ショートカット heading is present" \
 
 #==========================
 # 新規追加: ネットワーク表示
+#
+# 2026-09-07修正: 実機で、引数なし${downspeed}/${upspeed}によるConky内部
+# のデバイス自動選択がdefault route interfaceを正しく選ばず、Wi-Fi通信中
+# でもDown/Upが常に0Bのままになる不具合が確認された。修正後は、Conky組み
+# 込みのLua API conky_parse() で${gw_iface} (default routeのinterface名)
+# を取得し、それを明示的に${downspeed IFACE}/${upspeed IFACE}へ渡す
+# (mypocketos-network.lua)。ここでは、conky.text側が新しい実装
+# (${lua mypocketos_network_*}) を使っており、修正前の引数なし
+# ${downspeed}/${upspeed}に戻っていないことを重点的に確認する。
 #==========================
+check "mypocketos-network.lua exists" test -f "${NETWORK_LUA}"
+
 check "network: ネットワーク heading is present" \
 	sh -c 'printf "%s" "$1" | grep -qF "ネットワーク:"' _ "${TEXT_BLOCK}"
-check "network: uses \${if_gw} (built-in default-gateway check, no exec)" \
-	sh -c 'printf "%s" "$1" | grep -qF "\${if_gw}"' _ "${TEXT_BLOCK}"
-check "network: \${if_gw} is closed with \${endif}" \
+check "network: connectivity gating uses \${if_match \"\${lua mypocketos_network_connected}\" == \"yes\"}" \
+	sh -c 'printf "%s" "$1" | grep -qF "\${if_match \"\${lua mypocketos_network_connected}\" == \"yes\"}"' _ "${TEXT_BLOCK}"
+check "network: \${if_match} block is closed with \${endif}" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${endif}"' _ "${TEXT_BLOCK}"
 check "network: has an \${else} branch for the disconnected case" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${else}"' _ "${TEXT_BLOCK}"
 check "network: disconnected fallback text is 未接続" \
 	sh -c 'printf "%s" "$1" | grep -qF "未接続"' _ "${TEXT_BLOCK}"
-check "network: Down: line uses bare \${downspeed} (no interface argument)" \
-	sh -c 'printf "%s" "$1" | grep -qE "Down:\\\$color \\\${alignr}\\\$\\{downspeed\\}$"' _ "${TEXT_BLOCK}"
-check "network: Up: line uses bare \${upspeed} (no interface argument)" \
-	sh -c 'printf "%s" "$1" | grep -qE "Up:\\\$color \\\${alignr}\\\$\\{upspeed\\}"' _ "${TEXT_BLOCK}"
+check "network: Down: line calls \${lua mypocketos_network_downspeed}" \
+	sh -c 'printf "%s" "$1" | grep -qF "\${lua mypocketos_network_downspeed}"' _ "${TEXT_BLOCK}"
+check "network: Up: line calls \${lua mypocketos_network_upspeed}" \
+	sh -c 'printf "%s" "$1" | grep -qF "\${lua mypocketos_network_upspeed}"' _ "${TEXT_BLOCK}"
+
+# 回帰防止: 修正前の「引数なし${downspeed}/${upspeed}をConkyのデバイス
+# 自動選択に委ねる」実装 (2026-09-06版) に戻っていないことを確認する。
+# conky.text中に、引数を伴わない${downspeed}/${upspeed}が単体で
+# 現れないことを確認する (mypocketos-network.lua内で動的に組み立てられる
+# "${downspeed " .. iface .. "}" は別ファイルであり、ここでの対象は
+# conky.text本文のみ)。
+check "network: conky.text no longer uses bare (argument-less) \${downspeed}" \
+	sh -c '! printf "%s" "$1" | grep -qF "\${downspeed}"' _ "${TEXT_BLOCK}"
+check "network: conky.text no longer uses bare (argument-less) \${upspeed}" \
+	sh -c '! printf "%s" "$1" | grep -qF "\${upspeed}"' _ "${TEXT_BLOCK}"
+check "network: conky.text no longer uses \${if_gw} for the connectivity gate (replaced by gw_iface-based \${if_match})" \
+	sh -c '! printf "%s" "$1" | grep -qF "\${if_gw}"' _ "${TEXT_BLOCK}"
+
+# lua_loadがmypocketos-network.luaを読み込むよう更新されていること
+# (既存のmypocketos-boot-mode.luaの読み込みも維持されていること)
+check "conky.conf lua_load still loads mypocketos-boot-mode.lua" \
+	grep -q 'mypocketos-boot-mode\.lua' "${CONKY_CONF}"
+check "conky.conf lua_load now also loads mypocketos-network.lua" \
+	grep -q 'mypocketos-network\.lua' "${CONKY_CONF}"
+
+# mypocketos-network.luaの実装: default route interface (${gw_iface}) を
+# 基準にしていること、interface名をハードコードしていないこと、
+# downspeed/upspeedへ動的に取得したinterfaceを明示的に渡していること
+check "mypocketos-network.lua defines conky_mypocketos_network_connected" \
+	grep -qF 'function conky_mypocketos_network_connected' "${NETWORK_LUA}"
+check "mypocketos-network.lua defines conky_mypocketos_network_downspeed" \
+	grep -qF 'function conky_mypocketos_network_downspeed' "${NETWORK_LUA}"
+check "mypocketos-network.lua defines conky_mypocketos_network_upspeed" \
+	grep -qF 'function conky_mypocketos_network_upspeed' "${NETWORK_LUA}"
+check "mypocketos-network.lua obtains the interface via conky_parse(\"\${gw_iface}\") (default route, not hardcoded)" \
+	grep -qF 'conky_parse("${gw_iface}")' "${NETWORK_LUA}"
+check "mypocketos-network.lua passes the dynamically-obtained interface into \${downspeed IFACE}" \
+	grep -qF '"${downspeed " .. iface .. "}"' "${NETWORK_LUA}"
+check "mypocketos-network.lua passes the dynamically-obtained interface into \${upspeed IFACE}" \
+	grep -qF '"${upspeed " .. iface .. "}"' "${NETWORK_LUA}"
+check "mypocketos-network.lua validates the interface name (defense-in-depth) before reusing it in a template string" \
+	grep -qF 'local function valid_iface' "${NETWORK_LUA}"
 
 # デバイス名・vendor固有のインターフェース名をハードコードしていないこと
 # (wlan0/eth0/wlp2s0/enp3s0等のよくあるLinuxネットワークインターフェース
-# 命名パターンが、conky.text本文に一切現れないことを確認する)
+# 命名パターンが、conky.text本文にもmypocketos-network.luaにも一切
+# 現れないことを確認する。gw_iface自体はConkyが動的に判定するため、
+# 実際のinterface名の文字列がソース中に登場することはない)
 check "network: no hardcoded network interface name in conky.text (wlan/eth/wlp/enp/eno/ens/ppp/wwan)" \
 	sh -c '! printf "%s" "$1" | grep -qiE "(wlan|eth|wlp|enp|eno|ens|ppp|wwan)[0-9]"' _ "${TEXT_BLOCK}"
-
-# ファイル全体 (コメントも含む) にも、実引数として使われる形の
-# ハードコードされたインターフェース名が無いことを確認する。
-# 説明用コメント中の一般名詞的な例示 (wlan0/eth0等) はコメント内でのみ許容し、
-# ${downspeed ...}/${upspeed ...}のような実際の変数呼び出しの引数としては
-# 使われていないことを確認する。
-check "network: \${downspeed}/\${upspeed} never take an explicit interface argument anywhere in the file" \
-	sh -c '! grep -qE "\\\$\\{(downspeed|upspeed)[[:space:]]+[^}]" "$1"' _ "${CONKY_CONF}"
+# コメント行 (説明文。実機不具合報告の例示として実在のinterface名
+# wlp2s0/enp4s0に言及している) は除外し、実際のLuaコード行のみを対象に
+# ハードコード有無を確認する。
+check "network: no hardcoded network interface name in mypocketos-network.lua code (comments excluded)" \
+	sh -c '! grep -vE "^[[:space:]]*--" "$1" | grep -qiE "(wlan|eth|wlp|enp|eno|ens|ppp|wwan)[0-9]"' _ "${NETWORK_LUA}"
 
 #==========================
-# 既存の「execを使わない」方針が今回も維持されていること
+# 高頻度の重い外部コマンドを追加していないこと
+#==========================
+# conky.conf側: 既存の「execを使わない」方針が今回も維持されていること
 # (test_boot_mode.shで既に確認されている内容の重複確認だが、ネットワーク
-# 表示追加の文脈でも明示的に再確認する)
-#==========================
-check "no exec/execi variable was added for the network display" \
+# 表示修正の文脈でも明示的に再確認する)
+check "no exec/execi variable was added to conky.conf for the network display" \
 	sh -c '! grep -qF "\${exec" "$1"' _ "${CONKY_CONF}"
+
+# mypocketos-network.lua側: os.execute/io.popen/os.popen等でnmcli・ip・
+# awk・sed等の外部コマンドを一切spawnしていないこと。conky_parse()は
+# Conky本体の内部処理でありexecとは無関係。
+check "mypocketos-network.lua does not call os.execute (no external process spawning)" \
+	sh -c '! grep -qF "os.execute" "$1"' _ "${NETWORK_LUA}"
+check "mypocketos-network.lua does not call io.popen (no external process spawning)" \
+	sh -c '! grep -qF "io.popen" "$1"' _ "${NETWORK_LUA}"
+check "mypocketos-network.lua does not call os.popen (no external process spawning)" \
+	sh -c '! grep -qF "os.popen" "$1"' _ "${NETWORK_LUA}"
+# コメント行 (説明文。調査時に使った診断コマンド ip route show default
+# への言及を含む) は除外し、実際のLuaコード行のみを対象に確認する。
+check "mypocketos-network.lua code (comments excluded) does not shell out to nmcli/ip/awk/sed" \
+	sh -c '! grep -vE "^[[:space:]]*--" "$1" | grep -qiE "\bnmcli\b|\bip route\b|\bawk\b|\bsed\b"' _ "${NETWORK_LUA}"
+check "mypocketos-network.lua relies only on conky_parse() (no os./io. process APIs beyond string handling)" \
+	grep -qF 'conky_parse(' "${NETWORK_LUA}"
 
 #==========================
 # 新規追加: ウィンドウスナップ表示
