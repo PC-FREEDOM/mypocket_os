@@ -37,6 +37,14 @@
 # また、1行に${alignr}を複数回使うと後方のalignrが前方の右端位置計算に
 # 干渉することも実機相当の環境で確認されたため、この方式は採用していない)。
 #
+# さらに2026-09-08 (8commit目)、7commit目で採用した予約幅(ASCII 9文字
+# 分・約64px)が、実機で観測される実際の値の長さ(6〜7文字程度)に対して
+# 過大であり、値と区切り文字の間に不自然な空白ができ、行ごとの空白量も
+# ばらついて見た目が不揃いになる不具合が実機で確認された。予約幅を
+# ASCII 7文字分(約50px、実際に観測された値がすべて収まる根拠のある
+# 実測上限)へ縮小し、${goto}の座標値も縮小した(座標値算出の詳細は
+# conky.conf側のコメント参照)。
+#
 # このテストスクリプト自体は実Conky・実Xを一切使用しない(静的解析の
 # み)。実バイナリでの検証はtests/desktop-polish/README.mdおよびレビュー
 # 資料に手順を記録している。
@@ -251,6 +259,33 @@ check "rootfs: uses \${goto} to fix the position of the \"(\" before the percent
 	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{fs_size /\\}\\\$\{goto [0-9]+\}\\(\\\$\{fs_used_perc /\\}%\\)"' _ "${TEXT_BLOCK}"
 check "network: uses \${goto} to fix the position of \"/ Up\" (immune to \${downspeed} digit-count changes, so \"Down\"/\"/\"/\"Up\" no longer shift together)" \
 	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{downspeed \\\$\{gw_iface\}\\}\\\$\{goto [0-9]+\}/ Up"' _ "${TEXT_BLOCK}"
+
+#==========================
+# 列カラムのコンパクト化 (2026-09-08、8commit目)
+#
+# 背景: 7commit目で採用した固定幅(値の表示領域としてASCII換算9文字分・
+# 約64px)を実機で確認したところ、区切り位置自体は固定されたものの、
+# 実際に観測される値(6〜7文字程度)に対して予約幅が過大で、値と区切り
+# 文字の間に不自然に大きな空白ができ、行ごとの空白量もばらついて見た目が
+# 「ガタガタ」になる不具合が実機で確認された。
+#
+# 対応: 値の表示領域をASCII換算7文字分(約50px、1〜7commit目を通じて
+# 実際に観測されたすべての値が収まる、根拠のある実測上限)へ縮小した。
+# これに伴い、各${goto}の座標値も縮小している(メモリ: 128→114・
+# 206→178、ルートFS: 170→156・248→220、ネットワーク: 202→188)。
+#==========================
+for goto_val in 114 156 178 188 220; do
+	check "the compact (8commit-era) \${goto ${goto_val}} anchor is present" \
+		sh -c 'printf "%s" "$1" | grep -qF "\${goto '"${goto_val}"'}"' _ "${TEXT_BLOCK}"
+done
+
+# 回帰防止: 7commit目の過大な予約幅(ASCII 9文字分、約64px)の座標
+# (メモリ: 128・206、ルートFS: 170・248、ネットワーク: 202)へ戻って
+# いないことを確認する。
+for old_goto_val in 128 170 202 206 248; do
+	check "the over-provisioned (7commit-era) \${goto ${old_goto_val}} anchor is not present (regression guard against excessive whitespace)" \
+		sh -c '! printf "%s" "$1" | grep -qF "\${goto '"${old_goto_val}"'}"' _ "${TEXT_BLOCK}"
+done
 
 # 回帰防止: メモリ・ルートFS・ネットワークの3行が、行全体を丸ごと右寄せ
 # する旧来の単一${alignr}パターン (ラベル直後に${alignr}を置き、以降の
