@@ -56,6 +56,24 @@
 # する。実際のウィンドウ幅が実機で意図どおり安定しているかどうかは、
 # 実機確認が必要である。
 #
+# 【検討したが自動化しなかった項目 (2026-09-08、7commit目)】メモリ・
+# ルートFS・ネットワークの各行で、区切り文字("/"・"(")の位置を
+# ${goto x}で固定した。out_to_console=trueのヘッドレス実行では
+# ${goto x}は単なる無演算(座標指定はXの描画位置にのみ影響し、
+# コンソール出力のテキストストリームには影響しない)であるため、
+# 実際に区切り文字の"ピクセル位置"が値の桁数によらず固定されている
+# ことをこのスクリプトで確認することはできない。このスクリプトが
+# 確認できるのは、${goto}を含む新しいテンプレートが構文エラー・
+# Lua実行時エラーなくレンダリングでき、既存の値(${mem}・${memmax}・
+# ${memperc}・${fs_used /}・${fs_size /}・${fs_used_perc /}・
+# ${downspeed}・${upspeed})が引き続き空欄にならず出力されることのみ。
+# 実際のピクセル位置固定の確認は、6commit目までと同様、本セッション
+# 開発時に実際のX11ディスプレイ上でconkyを動かしxwdで実測する形で
+# 行った(reports/ai-review/20260906-conky-system-network-polish.md
+# に手順と結果を記録)。この測定はテストスイートの一部として自動化
+# しておらず、CI・本スクリプトには含まれていない(ヘッドレス環境で
+# 安全に自動化できないため)。実機での位置固定確認は別途必要である。
+#
 # 【重要】このテストは4つの必須ローカルテストスイート
 # (tests/persistence, tests/edition-build, tests/desktop-polish,
 # tests/usb-persistence-image) の一部ではなく、
@@ -183,6 +201,10 @@ check "network label rendered: ネットワーク" grep -q 'ネットワーク' 
 # 2026-09-08 (5commit目): ネットワーク表示は「ネットワーク:」見出しと
 # Down/Upの値が同一行の1行表示 ("ネットワーク: Down <値> / Up <値>")
 # であるため、そのネットワーク行自体からDown/Upの値を抽出して確認する。
+# 2026-09-08 (7commit目): "/" の直前に${goto x}を挿入したため、
+# out_to_console出力では値と"/"の間に空白が入らなくなった
+# ("Down <値>/ Up <値>"、goto自体はコンソール出力に対しては無演算)。
+# 抽出用の正規表現をこれに合わせて更新した。
 check "network line's Down/Up values are not blank (or the 未接続 fallback is shown)" \
 	sh -c '
 	out="$1"
@@ -191,7 +213,7 @@ check "network line's Down/Up values are not blank (or the 未接続 fallback is
 	fi
 	network_line="$(grep "ネットワーク:" "${out}" | head -n1)"
 	[ -n "${network_line}" ] || exit 1
-	down_val="$(printf "%s" "${network_line}" | sed -n "s/.*Down \\(.*\\) \\/ Up.*/\\1/p")"
+	down_val="$(printf "%s" "${network_line}" | sed -n "s#.*Down \\(.*\\)/ Up.*#\\1#p")"
 	up_val="$(printf "%s" "${network_line}" | sed -n "s/.*Up \\(.*\\)$/\\1/p")"
 	[ -n "${down_val}" ] && [ -n "${up_val}" ]
 	' _ "${OUT_FILE}"

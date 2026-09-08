@@ -26,6 +26,17 @@
 # で対応した(値は実際にX11ディスプレイ上でconky-std 1.22.1バイナリを
 # 動かして実測した描画幅を基準に決定。推測による決め打ちではない)。
 #
+# さらに2026-09-08 (7commit目)、ウィンドウ全体の横幅は固定されたものの、
+# メモリ・ルートFS・ネットワークの各行が単一の${alignr}で行全体を右寄せ
+# していたため、値の桁数が変わるたびに「Down」「/」「Up」等の固定文字列
+# 自体の位置が左右に移動する不具合が実機で確認された。区切り文字の直前に
+# ${goto x}(絶対座標指定、直前テキスト長に非依存)を置く方式に置き換えて
+# 対応した。座標値は実際にX11ディスプレイ上でconky-std 1.22.1バイナリを
+# レンダリングし、値の文字数を変えた複数パターンで${goto}直後の文字の
+# 開始座標が一致することを実測して検証した(推測による決め打ちではない。
+# また、1行に${alignr}を複数回使うと後方のalignrが前方の右端位置計算に
+# 干渉することも実機相当の環境で確認されたため、この方式は採用していない)。
+#
 # このテストスクリプト自体は実Conky・実Xを一切使用しない(静的解析の
 # み)。実バイナリでの検証はtests/desktop-polish/README.mdおよびレビュー
 # 資料に手順を記録している。
@@ -126,14 +137,14 @@ check "existing: CPU bar (\${cpubar 6}) is still present and unchanged" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${cpubar 6}"' _ "${TEXT_BLOCK}"
 check "existing: memory (メモリ) line is present" \
 	sh -c 'printf "%s" "$1" | grep -qF "メモリ:"' _ "${TEXT_BLOCK}"
-check "existing: memory line still uses \${mem} / \${memmax} (\${memperc}%)" \
-	sh -c 'printf "%s" "$1" | grep -qF "\${mem} / \${memmax} (\${memperc}%)"' _ "${TEXT_BLOCK}"
+check "existing: memory line still shows \${mem}, \${memmax}, \${memperc} (values themselves unchanged, only the layout around them changed for column-fixing)" \
+	sh -c 'printf "%s" "$1" | grep -qF "\${mem}" && printf "%s" "$1" | grep -qF "\${memmax}" && printf "%s" "$1" | grep -qF "\${memperc}"' _ "${TEXT_BLOCK}"
 check "existing: memory bar (\${membar 6}) is still present and unchanged" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${membar 6}"' _ "${TEXT_BLOCK}"
 check "existing: root filesystem line is present" \
 	sh -c 'printf "%s" "$1" | grep -qF "ルートFS (/):"' _ "${TEXT_BLOCK}"
-check "existing: root filesystem line still uses \${fs_used /} / \${fs_size /} (\${fs_used_perc /}%)" \
-	sh -c 'printf "%s" "$1" | grep -qF "\${fs_used /} / \${fs_size /} (\${fs_used_perc /}%)"' _ "${TEXT_BLOCK}"
+check "existing: root filesystem line still shows \${fs_used /}, \${fs_size /}, \${fs_used_perc /} (values themselves unchanged, only the layout around them changed for column-fixing)" \
+	sh -c 'printf "%s" "$1" | grep -qF "\${fs_used /}" && printf "%s" "$1" | grep -qF "\${fs_size /}" && printf "%s" "$1" | grep -qF "\${fs_used_perc /}"' _ "${TEXT_BLOCK}"
 check "existing: root filesystem bar (\${fs_bar 6 /}) is still present and unchanged" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${fs_bar 6 /}"' _ "${TEXT_BLOCK}"
 
@@ -198,10 +209,10 @@ check "network: conky.text no longer calls \${lua mypocketos_network_ (1st-fix�
 #==========================
 # ネットワーク表示レイアウト (2026-09-08、5commit目: 1行表示)
 #==========================
-check "network: connected-state Down/Up are combined on a single line as \"Down <value> / Up <value>\"" \
-	sh -c 'printf "%s" "$1" | grep -qF "Down \${downspeed \${gw_iface}} / Up \${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
+check "network: connected-state Down/Up are combined on a single line as \"Down <value> ... / Up <value>\"" \
+	sh -c 'printf "%s" "$1" | grep -qF "Down \${downspeed \${gw_iface}}" && printf "%s" "$1" | grep -qF "/ Up \${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
 check "network: the ネットワーク: heading and the Down/Up values are on the same physical line (connected state)" \
-	sh -c 'printf "%s\n" "$1" | grep -qE "ネットワーク:.*Down .*\\\${downspeed \\\${gw_iface}}.*Up .*\\\${upspeed \\\${gw_iface}}"' _ "${TEXT_BLOCK}"
+	sh -c 'printf "%s\n" "$1" | grep -qE "ネットワーク:.*Down .*\\\${downspeed \\\${gw_iface}}.*/ Up .*\\\${upspeed \\\${gw_iface}}"' _ "${TEXT_BLOCK}"
 check "network: disconnected fallback (未接続) is on a single line with the ネットワーク: heading" \
 	sh -c 'printf "%s\n" "$1" | grep -qE "ネットワーク:\\\$color \\\${alignr}未接続"' _ "${TEXT_BLOCK}"
 check "network: no arrow glyphs (↓/↑/→/←) were introduced for the network display" \
@@ -213,6 +224,55 @@ check "network: old 3-line layout (indented \"  Down:\" sub-line) is not present
 	sh -c '! printf "%s" "$1" | grep -qF "  Down:\$color"' _ "${TEXT_BLOCK}"
 check "network: old 3-line layout (indented \"  Up:\" sub-line) is not present" \
 	sh -c '! printf "%s" "$1" | grep -qF "  Up:\$color"' _ "${TEXT_BLOCK}"
+
+#==========================
+# 可変値の列位置固定化 (2026-09-08、7commit目)
+#
+# 背景: 6commit目でウィンドウ全体の横幅は固定したが、メモリ・ルートFS・
+# ネットワークの各行は依然として単一の${alignr}で行全体を右寄せしていた
+# ため、値の桁数が変わるたびに「Down」「/」「Up」やメモリ/ルートFSの
+# 「/」自体の位置が左右に移動する不具合が実機で確認された。
+#
+# 対応: これら3行について、区切り文字("/"・"(")の直前に${goto x}を
+# 置き、絶対座標で開始位置を固定した。${goto x}は直前のテキスト長に
+# 依存しない(Conky公式ドキュメント記載の絶対位置指定)。座標値は、実際に
+# X11ディスプレイ上でconky-std 1.22.1バイナリをレンダリングし、値の
+# 文字数を変えた複数パターンで${goto}直後の文字の開始x座標が完全に一致
+# することを実測して検証した上で決定している(このテストスクリプトの
+# 冒頭コメント、およびconky.conf側のコメント参照)。
+#==========================
+check "memory: uses \${goto} to fix the position of the \"/\" separator between used and total (immune to \${mem} digit-count changes)" \
+	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{mem\}\\\$\{goto [0-9]+\}/ \\\$\{memmax\}"' _ "${TEXT_BLOCK}"
+check "memory: uses \${goto} to fix the position of the \"(\" before the percentage (immune to \${memmax} digit-count changes)" \
+	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{memmax\}\\\$\{goto [0-9]+\}\\(\\\$\{memperc\}%\\)"' _ "${TEXT_BLOCK}"
+check "rootfs: uses \${goto} to fix the position of the \"/\" separator between used and total (immune to \${fs_used /} digit-count changes)" \
+	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{fs_used /\\}\\\$\{goto [0-9]+\}/ \\\$\{fs_size /\\}"' _ "${TEXT_BLOCK}"
+check "rootfs: uses \${goto} to fix the position of the \"(\" before the percentage (immune to \${fs_size /} digit-count changes)" \
+	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{fs_size /\\}\\\$\{goto [0-9]+\}\\(\\\$\{fs_used_perc /\\}%\\)"' _ "${TEXT_BLOCK}"
+check "network: uses \${goto} to fix the position of \"/ Up\" (immune to \${downspeed} digit-count changes, so \"Down\"/\"/\"/\"Up\" no longer shift together)" \
+	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{downspeed \\\$\{gw_iface\}\\}\\\$\{goto [0-9]+\}/ Up"' _ "${TEXT_BLOCK}"
+
+# 回帰防止: メモリ・ルートFS・ネットワークの3行が、行全体を丸ごと右寄せ
+# する旧来の単一${alignr}パターン (ラベル直後に${alignr}を置き、以降の
+# 全テキストをまとめて右寄せする書き方) へ戻っていないことを確認する。
+# これらの行では複数の可変値を1行に含むため、単一の${alignr}では値の
+# 桁数変化のたびに固定文字列("Down"・"/"・"Up"等)まで位置がずれてしまう
+# (このバグは実機で確認済み)。行末尾の値1つだけを右寄せする分には
+# 問題ないが、行の先頭付近(ラベル直後)に${alignr}を置く形には戻さない。
+check "memory: no longer uses a single whole-line \${alignr} right after the label (regression guard against the 6commit-era per-row width instability)" \
+	sh -c '! printf "%s" "$1" | grep -qF "メモリ:\$color \${alignr}"' _ "${TEXT_BLOCK}"
+check "rootfs: no longer uses a single whole-line \${alignr} right after the label (regression guard against the 6commit-era per-row width instability)" \
+	sh -c '! printf "%s" "$1" | grep -qF "ルートFS (/):\$color \${alignr}"' _ "${TEXT_BLOCK}"
+check "network: connected-state branch no longer uses a single whole-line \${alignr} right after the label (regression guard; the disconnected/未接続 branch may still use \${alignr} since it has only one value)" \
+	sh -c '! printf "%s" "$1" | grep -qF "ネットワーク:\$color \${alignr}Down"' _ "${TEXT_BLOCK}"
+
+# 既存の${alignr}ベースの右寄せレイアウト自体は、単一値のみの行
+# (ホスト名・カーネル・稼働時間・起動モード・CPU使用率・未接続時の
+# ネットワーク) では変更していないことを確認する。
+for label in 'ホスト名' 'カーネル' '稼働時間' '起動モード' 'CPU使用率'; do
+	check "${label} line still uses \${alignr} for right-justification (unchanged, single-value row)" \
+		sh -c 'printf "%s" "$1" | grep -qF "$2:\$color \${alignr}"' _ "${TEXT_BLOCK}" "${label}"
+done
 
 # lua_loadはmypocketos-boot-mode.luaのみを読み込み、mypocketos-network.lua
 # への参照が残っていないこと(1st-fix版からの後始末漏れがないことの確認)
