@@ -42,8 +42,18 @@
 # 過大であり、値と区切り文字の間に不自然な空白ができ、行ごとの空白量も
 # ばらついて見た目が不揃いになる不具合が実機で確認された。予約幅を
 # ASCII 7文字分(約50px、実際に観測された値がすべて収まる根拠のある
-# 実測上限)へ縮小し、${goto}の座標値も縮小した(座標値算出の詳細は
-# conky.conf側のコメント参照)。
+# 実測上限)へ縮小し、${goto}の座標値も縮小した。
+#
+# 【7・8commit目は過去の実装であり、9commit目で撤回済み】上記の
+# ${goto x}による固定カラム方式は、VMでの見た目確認の結果、区切り文字
+# の位置はある程度固定できるものの、行ごとの空白が不自然でショート
+# カット欄のような整然とした印象にならないと評価された。2026-09-08
+# (9commit目・現行)、メモリ・ルートFS・ネットワークの3行を、6commit目
+# までと同じ${alignr}ベースの右揃え表示へ戻した。値の桁数によって
+# 区切り文字の位置が多少動くことは許容し、「行として自然に整って見える
+# こと」を優先する方針へ変更した。minimum_width/maximum_width=310に
+# よるウィンドウ全体の横幅固定(6commit目)・Network取得ロジック・
+# dispatcherは変更していない。
 #
 # このテストスクリプト自体は実Conky・実Xを一切使用しない(静的解析の
 # み)。実バイナリでの検証はtests/desktop-polish/README.mdおよびレビュー
@@ -145,13 +155,13 @@ check "existing: CPU bar (\${cpubar 6}) is still present and unchanged" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${cpubar 6}"' _ "${TEXT_BLOCK}"
 check "existing: memory (メモリ) line is present" \
 	sh -c 'printf "%s" "$1" | grep -qF "メモリ:"' _ "${TEXT_BLOCK}"
-check "existing: memory line still shows \${mem}, \${memmax}, \${memperc} (values themselves unchanged, only the layout around them changed for column-fixing)" \
+check "existing: memory line still shows \${mem}, \${memmax}, \${memperc} (values themselves unchanged)" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${mem}" && printf "%s" "$1" | grep -qF "\${memmax}" && printf "%s" "$1" | grep -qF "\${memperc}"' _ "${TEXT_BLOCK}"
 check "existing: memory bar (\${membar 6}) is still present and unchanged" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${membar 6}"' _ "${TEXT_BLOCK}"
 check "existing: root filesystem line is present" \
 	sh -c 'printf "%s" "$1" | grep -qF "ルートFS (/):"' _ "${TEXT_BLOCK}"
-check "existing: root filesystem line still shows \${fs_used /}, \${fs_size /}, \${fs_used_perc /} (values themselves unchanged, only the layout around them changed for column-fixing)" \
+check "existing: root filesystem line still shows \${fs_used /}, \${fs_size /}, \${fs_used_perc /} (values themselves unchanged)" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${fs_used /}" && printf "%s" "$1" | grep -qF "\${fs_size /}" && printf "%s" "$1" | grep -qF "\${fs_used_perc /}"' _ "${TEXT_BLOCK}"
 check "existing: root filesystem bar (\${fs_bar 6 /}) is still present and unchanged" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${fs_bar 6 /}"' _ "${TEXT_BLOCK}"
@@ -234,72 +244,37 @@ check "network: old 3-line layout (indented \"  Up:\" sub-line) is not present" 
 	sh -c '! printf "%s" "$1" | grep -qF "  Up:\$color"' _ "${TEXT_BLOCK}"
 
 #==========================
-# 可変値の列位置固定化 (2026-09-08、7commit目)
+# メモリ・ルートFS・Network行のレイアウト (2026-09-08、9commit目・現行)
 #
-# 背景: 6commit目でウィンドウ全体の横幅は固定したが、メモリ・ルートFS・
-# ネットワークの各行は依然として単一の${alignr}で行全体を右寄せしていた
-# ため、値の桁数が変わるたびに「Down」「/」「Up」やメモリ/ルートFSの
-# 「/」自体の位置が左右に移動する不具合が実機で確認された。
+# 経緯: 6commit目でウィンドウ全体の横幅を固定した後、7commit目で
+# メモリ・ルートFS・ネットワークの各行に${goto x}を導入し、区切り文字
+# ("/"・"(")の位置をピクセル単位で絶対座標固定する方式を採用した。
+# 8commit目で、その予約幅を過大(9文字)から縮小(7文字)する調整も
+# 行った。しかし、ユーザーがVMで実際の見た目を確認したところ、区切り
+# 位置はある程度固定できるものの、行ごとの空白が不自然でショートカット
+# 欄のような整然とした印象にならないと評価され、6commit目までの
+# ${alignr}による単純な右揃え表示の方が見やすいと判断された。
 #
-# 対応: これら3行について、区切り文字("/"・"(")の直前に${goto x}を
-# 置き、絶対座標で開始位置を固定した。${goto x}は直前のテキスト長に
-# 依存しない(Conky公式ドキュメント記載の絶対位置指定)。座標値は、実際に
-# X11ディスプレイ上でconky-std 1.22.1バイナリをレンダリングし、値の
-# 文字数を変えた複数パターンで${goto}直後の文字の開始x座標が完全に一致
-# することを実測して検証した上で決定している(このテストスクリプトの
-# 冒頭コメント、およびconky.conf側のコメント参照)。
+# 対応: 9commit目で、メモリ・ルートFS・ネットワークの3行を、7・8commit
+# 目で導入した${goto x}による固定カラム方式から撤回し、6commit目まで
+# と同じ${alignr}ベースの右揃え表示へ戻した。値の桁数によって行全体の
+# 右寄せ位置(≒区切り文字の位置)が多少動くことは許容し、「行として
+# 自然に整って見えること」を優先する。minimum_width/maximum_width=310
+# によるウィンドウ全体の横幅固定(6commit目)は維持している。
 #==========================
-check "memory: uses \${goto} to fix the position of the \"/\" separator between used and total (immune to \${mem} digit-count changes)" \
-	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{mem\}\\\$\{goto [0-9]+\}/ \\\$\{memmax\}"' _ "${TEXT_BLOCK}"
-check "memory: uses \${goto} to fix the position of the \"(\" before the percentage (immune to \${memmax} digit-count changes)" \
-	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{memmax\}\\\$\{goto [0-9]+\}\\(\\\$\{memperc\}%\\)"' _ "${TEXT_BLOCK}"
-check "rootfs: uses \${goto} to fix the position of the \"/\" separator between used and total (immune to \${fs_used /} digit-count changes)" \
-	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{fs_used /\\}\\\$\{goto [0-9]+\}/ \\\$\{fs_size /\\}"' _ "${TEXT_BLOCK}"
-check "rootfs: uses \${goto} to fix the position of the \"(\" before the percentage (immune to \${fs_size /} digit-count changes)" \
-	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{fs_size /\\}\\\$\{goto [0-9]+\}\\(\\\$\{fs_used_perc /\\}%\\)"' _ "${TEXT_BLOCK}"
-check "network: uses \${goto} to fix the position of \"/ Up\" (immune to \${downspeed} digit-count changes, so \"Down\"/\"/\"/\"Up\" no longer shift together)" \
-	sh -c 'printf "%s" "$1" | grep -qE "\\\$\{downspeed \\\$\{gw_iface\}\\}\\\$\{goto [0-9]+\}/ Up"' _ "${TEXT_BLOCK}"
+check "memory: line matches the 6commit-era \${alignr}-based layout exactly (no \${goto})" \
+	sh -c 'printf "%s" "$1" | grep -qF "メモリ:\$color \${alignr}\${mem} / \${memmax} (\${memperc}%)"' _ "${TEXT_BLOCK}"
+check "rootfs: line matches the 6commit-era \${alignr}-based layout exactly (no \${goto})" \
+	sh -c 'printf "%s" "$1" | grep -qF "ルートFS (/):\$color \${alignr}\${fs_used /} / \${fs_size /} (\${fs_used_perc /}%)"' _ "${TEXT_BLOCK}"
+check "network: connected-state branch matches the 6commit-era \${alignr}-based layout exactly (no \${goto})" \
+	sh -c 'printf "%s" "$1" | grep -qF "ネットワーク:\$color \${alignr}Down \${downspeed \${gw_iface}} / Up \${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
 
-#==========================
-# 列カラムのコンパクト化 (2026-09-08、8commit目)
-#
-# 背景: 7commit目で採用した固定幅(値の表示領域としてASCII換算9文字分・
-# 約64px)を実機で確認したところ、区切り位置自体は固定されたものの、
-# 実際に観測される値(6〜7文字程度)に対して予約幅が過大で、値と区切り
-# 文字の間に不自然に大きな空白ができ、行ごとの空白量もばらついて見た目が
-# 「ガタガタ」になる不具合が実機で確認された。
-#
-# 対応: 値の表示領域をASCII換算7文字分(約50px、1〜7commit目を通じて
-# 実際に観測されたすべての値が収まる、根拠のある実測上限)へ縮小した。
-# これに伴い、各${goto}の座標値も縮小している(メモリ: 128→114・
-# 206→178、ルートFS: 170→156・248→220、ネットワーク: 202→188)。
-#==========================
-for goto_val in 114 156 178 188 220; do
-	check "the compact (8commit-era) \${goto ${goto_val}} anchor is present" \
-		sh -c 'printf "%s" "$1" | grep -qF "\${goto '"${goto_val}"'}"' _ "${TEXT_BLOCK}"
-done
-
-# 回帰防止: 7commit目の過大な予約幅(ASCII 9文字分、約64px)の座標
-# (メモリ: 128・206、ルートFS: 170・248、ネットワーク: 202)へ戻って
-# いないことを確認する。
-for old_goto_val in 128 170 202 206 248; do
-	check "the over-provisioned (7commit-era) \${goto ${old_goto_val}} anchor is not present (regression guard against excessive whitespace)" \
-		sh -c '! printf "%s" "$1" | grep -qF "\${goto '"${old_goto_val}"'}"' _ "${TEXT_BLOCK}"
-done
-
-# 回帰防止: メモリ・ルートFS・ネットワークの3行が、行全体を丸ごと右寄せ
-# する旧来の単一${alignr}パターン (ラベル直後に${alignr}を置き、以降の
-# 全テキストをまとめて右寄せする書き方) へ戻っていないことを確認する。
-# これらの行では複数の可変値を1行に含むため、単一の${alignr}では値の
-# 桁数変化のたびに固定文字列("Down"・"/"・"Up"等)まで位置がずれてしまう
-# (このバグは実機で確認済み)。行末尾の値1つだけを右寄せする分には
-# 問題ないが、行の先頭付近(ラベル直後)に${alignr}を置く形には戻さない。
-check "memory: no longer uses a single whole-line \${alignr} right after the label (regression guard against the 6commit-era per-row width instability)" \
-	sh -c '! printf "%s" "$1" | grep -qF "メモリ:\$color \${alignr}"' _ "${TEXT_BLOCK}"
-check "rootfs: no longer uses a single whole-line \${alignr} right after the label (regression guard against the 6commit-era per-row width instability)" \
-	sh -c '! printf "%s" "$1" | grep -qF "ルートFS (/):\$color \${alignr}"' _ "${TEXT_BLOCK}"
-check "network: connected-state branch no longer uses a single whole-line \${alignr} right after the label (regression guard; the disconnected/未接続 branch may still use \${alignr} since it has only one value)" \
-	sh -c '! printf "%s" "$1" | grep -qF "ネットワーク:\$color \${alignr}Down"' _ "${TEXT_BLOCK}"
+# 回帰防止: 7・8commit目で導入した${goto}による固定カラム方式(座標値の
+# 新旧いずれも)へ戻っていないことを確認する。${goto}自体が
+# conky.textのどこにも一切登場しないことを確認することで、将来
+# 別の座標値で再導入された場合も検出できるようにする。
+check "no \${goto} anywhere in conky.text (regression guard against the 7/8commit-era fixed-column approach, rejected for looking uneven in VM testing)" \
+	sh -c '! printf "%s" "$1" | grep -qF "\${goto"' _ "${TEXT_BLOCK}"
 
 # 既存の${alignr}ベースの右寄せレイアウト自体は、単一値のみの行
 # (ホスト名・カーネル・稼働時間・起動モード・CPU使用率・未接続時の

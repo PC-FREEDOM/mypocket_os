@@ -80,6 +80,15 @@
 # していない(座標値の変更はヘッドレス実行のテキストストリームには
 # 現れないため)。実行して9シナリオすべてPASSすることを再確認した。
 #
+# 追記 (2026-09-08、9commit目・現行): 7・8commit目で導入した${goto x}
+# による固定カラム方式は、VMでの見た目確認の結果、行ごとの空白が不
+# 自然でショートカット欄のような整然とした印象にならないと評価され、
+# 撤回された。メモリ・ルートFS・ネットワークの3行を6commit目までと
+# 同じ${alignr}ベースの右揃え表示へ戻したことに伴い、ネットワーク行の
+# Down/Up値抽出用の正規表現を、値と"/"の間に空白がある元の形式
+# ("Down <値> / Up <値>")向けに戻した。実行して9シナリオすべてPASS
+# することを確認した。
+#
 # 【重要】このテストは4つの必須ローカルテストスイート
 # (tests/persistence, tests/edition-build, tests/desktop-polish,
 # tests/usb-persistence-image) の一部ではなく、
@@ -207,10 +216,12 @@ check "network label rendered: ネットワーク" grep -q 'ネットワーク' 
 # 2026-09-08 (5commit目): ネットワーク表示は「ネットワーク:」見出しと
 # Down/Upの値が同一行の1行表示 ("ネットワーク: Down <値> / Up <値>")
 # であるため、そのネットワーク行自体からDown/Upの値を抽出して確認する。
-# 2026-09-08 (7commit目): "/" の直前に${goto x}を挿入したため、
-# out_to_console出力では値と"/"の間に空白が入らなくなった
-# ("Down <値>/ Up <値>"、goto自体はコンソール出力に対しては無演算)。
-# 抽出用の正規表現をこれに合わせて更新した。
+# 2026-09-08 (7commit目、9commit目で撤回済み): "/" の直前に${goto x}を
+# 挿入していた期間は、out_to_console出力で値と"/"の間に空白が入らな
+# かった("Down <値>/ Up <値>")。9commit目で${goto}による固定カラム
+# 方式を撤回し${alignr}ベースの表示へ戻したため、値と"/"の間に空白が
+# 入る元の形式("Down <値> / Up <値>")に戻っている。抽出用の正規表現も
+# これに合わせて戻した。
 check "network line's Down/Up values are not blank (or the 未接続 fallback is shown)" \
 	sh -c '
 	out="$1"
@@ -219,7 +230,7 @@ check "network line's Down/Up values are not blank (or the 未接続 fallback is
 	fi
 	network_line="$(grep "ネットワーク:" "${out}" | head -n1)"
 	[ -n "${network_line}" ] || exit 1
-	down_val="$(printf "%s" "${network_line}" | sed -n "s#.*Down \\(.*\\)/ Up.*#\\1#p")"
+	down_val="$(printf "%s" "${network_line}" | sed -n "s/.*Down \\(.*\\) \\/ Up.*/\\1/p")"
 	up_val="$(printf "%s" "${network_line}" | sed -n "s/.*Up \\(.*\\)$/\\1/p")"
 	[ -n "${down_val}" ] && [ -n "${up_val}" ]
 	' _ "${OUT_FILE}"
