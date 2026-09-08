@@ -20,6 +20,12 @@
 #     ビルド済みconky-std 1.22.1バイナリで動作を検証済み(このテスト
 #     ファイルのコメントで検証方法を記録する)。
 #
+# 加えて2026-09-08 (6commit目)、ネットワーク速度・メモリ・ルートFS等の
+# 値が変化するたびにConkyウィンドウ全体の横幅が変化する不具合が実機で
+# 確認された。minimum_width/maximum_widthを同一の固定値に設定すること
+# で対応した(値は実際にX11ディスプレイ上でconky-std 1.22.1バイナリを
+# 動かして実測した描画幅を基準に決定。推測による決め打ちではない)。
+#
 # このテストスクリプト自体は実Conky・実Xを一切使用しない(静的解析の
 # み)。実バイナリでの検証はtests/desktop-polish/README.mdおよびレビュー
 # 資料に手順を記録している。
@@ -52,6 +58,44 @@ check "conky.conf exists" test -f "${CONKY_CONF}"
 TEXT_BLOCK="$(sed -n '/^conky\.text = \[\[$/,/^\]\]$/p' "${CONKY_CONF}")"
 check "conky.text block was extracted (non-empty)" \
 	sh -c '[ -n "$1" ]' _ "${TEXT_BLOCK}"
+
+# conky.config = { ... } の本文部分だけを取り出す (comment行と区別する)。
+CONFIG_BLOCK="$(sed -n '/^conky\.config = {$/,/^}$/p' "${CONKY_CONF}")"
+check "conky.config block was extracted (non-empty)" \
+	sh -c '[ -n "$1" ]' _ "${CONFIG_BLOCK}"
+
+#==========================
+# 固定幅化 (2026-09-08、6commit目)
+#
+# 背景: ネットワーク速度・メモリ・ルートFS等の値が変化するたびに、
+# Conkyウィンドウ全体の横幅も変化してしまう不具合が実機で確認された。
+# minimum_widthとmaximum_widthを同一値に設定することで、ウィンドウの
+# 横幅をほぼ固定する。値は、本セッションで実際にX11ディスプレイ・
+# 実フォントを使ってconky-std 1.22.1バイナリをレンダリングし、
+# 最も長くなりうる値を仮定した場合の実測描画幅(298px)を基準に決定した
+# (推測による決め打ちではない)。
+#==========================
+check "minimum_width is set" \
+	sh -c 'printf "%s" "$1" | grep -qE "minimum_width[[:space:]]*=[[:space:]]*[0-9]+,"' _ "${CONFIG_BLOCK}"
+check "maximum_width is set" \
+	sh -c 'printf "%s" "$1" | grep -qE "maximum_width[[:space:]]*=[[:space:]]*[0-9]+,"' _ "${CONFIG_BLOCK}"
+check "minimum_width and maximum_width are set to the same fixed value (window width does not grow/shrink with content)" \
+	sh -c '
+	min_val=$(printf "%s" "$1" | sed -nE "s/.*minimum_width[[:space:]]*=[[:space:]]*([0-9]+),.*/\1/p")
+	max_val=$(printf "%s" "$1" | sed -nE "s/.*maximum_width[[:space:]]*=[[:space:]]*([0-9]+),.*/\1/p")
+	[ -n "$min_val" ] && [ -n "$max_val" ] && [ "$min_val" = "$max_val" ]
+	' _ "${CONFIG_BLOCK}"
+check "the fixed width setting appears exactly once each (single, unambiguous source of truth)" \
+	sh -c '
+	min_count=$(printf "%s" "$1" | grep -oE "minimum_width[[:space:]]*=" | wc -l)
+	max_count=$(printf "%s" "$1" | grep -oE "maximum_width[[:space:]]*=" | wc -l)
+	[ "$min_count" -eq 1 ] && [ "$max_count" -eq 1 ]
+	' _ "${CONFIG_BLOCK}"
+check "the fixed width is comfortably wider than the empirically-measured worst-case content width (298px), not merely equal to it" \
+	sh -c '
+	min_val=$(printf "%s" "$1" | sed -nE "s/.*minimum_width[[:space:]]*=[[:space:]]*([0-9]+),.*/\1/p")
+	[ -n "$min_val" ] && [ "$min_val" -ge 300 ] && [ "$min_val" -le 340 ]
+	' _ "${CONFIG_BLOCK}"
 
 #==========================
 # 既存表示項目の維持 (削除・置換していないこと)
