@@ -29,6 +29,30 @@
 # 既存のREADME (「GUIによる永続領域作成」節) でも前提としている
 # 固定のLiveユーザー`user`のみを対象とする。
 #
+# 追記 (2026-09-08、4commit目入りISOの実機確認結果を踏まえた5度目の
+# 修正): 4commit目の時点では、DISPLAY・XAUTHORITY・HOMEのみを引き継いで
+# いたため、再起動後のConkyで日本語表示が全面的に文字化けし
+# (LANG未引き継ぎ)、起動モードが常にUnknownになる
+# (XDG_RUNTIME_DIR未引き継ぎ。mypocketos-boot-mode.luaが
+# $XDG_RUNTIME_DIR/mypocketos-boot-mode.txt を参照できないため、
+# 設計どおりfail-closeでUnknownになっていた) ことが実機で確認された。
+# 同じ実機で、ユーザー自身が端末から`conky -p 3 -U &`で再起動すると
+# (シェル経由でユーザーセッションの環境をそのまま継承するため)
+# 日本語表示・起動モードとも正常に復帰することも確認された。
+#
+# この事実を踏まえ、既存のDISPLAY・XAUTHORITY・HOMEに加えて、LANG・
+# XDG_RUNTIME_DIRと、あらかじめ列挙した既知のLC_*変数(LC_ALL・
+# LC_CTYPE・LC_MESSAGES・LC_TIME・LC_NUMERIC・LC_COLLATE・
+# LC_MONETARY)を、稼働中のConky自身の/proc/<pid>/environから個別に
+# 明示的に読み取り、存在する場合のみ再起動後のConkyへ引き継ぐ。
+# environの内容を無条件・無制限にまるごとコピーする実装にはしていない
+# (未知の変数を予期せず引き継がないため)。LANG・XDG_RUNTIME_DIR・
+# LC_*が取得できない場合でも、DISPLAYさえ取得できれば再起動自体は
+# 行う (fail-safe。日本語表示・起動モード表示は劣化しうるが、
+# ネットワーク表示の0B固定という主要な不具合は解消される)。
+# DISPLAYのみ、取得できない場合は再起動自体を行わない (fail-close、
+# 既存方針のまま)。
+#
 set -eu
 
 ACTION="${2:-}"
@@ -49,14 +73,30 @@ CONKY_PID="$(pgrep -u "${LIVE_USER}" -x conky 2>/dev/null | head -n1)" || true
 ENVIRON_FILE="/proc/${CONKY_PID}/environ"
 [ -r "${ENVIRON_FILE}" ] || exit 0
 
-# 稼働中のConky自身が実際に使っているDISPLAY/XAUTHORITY/HOMEをそのまま
-# 再利用する (推測・ハードコードしない)。
+# 稼働中のConky自身が実際に使っているDISPLAY/XAUTHORITY/HOME/LANG/
+# XDG_RUNTIME_DIR/LC_*をそのまま再利用する (推測・ハードコードしない)。
+# kill前に (プロセスが生存している間に) すべて読み取っておく
+# (/proc/<pid>/environはプロセス終了後には読めなくなるため)。
 CONKY_DISPLAY="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n 's/^DISPLAY=//p' | head -n1)"
 CONKY_XAUTHORITY="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n 's/^XAUTHORITY=//p' | head -n1)"
 CONKY_HOME="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n 's/^HOME=//p' | head -n1)"
+CONKY_LANG="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n 's/^LANG=//p' | head -n1)"
+CONKY_XDG_RUNTIME_DIR="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n 's/^XDG_RUNTIME_DIR=//p' | head -n1)"
+
+# LC_*は、環境変数を無制限にまるごとコピーしないよう、既知の変数名を
+# 明示的に列挙したリストのみを対象とする (未知の変数を予期せず引き継が
+# ない)。ここで (kill前に) 値を確定させ、"NAME=VALUE" の形で保持する。
+LC_ENV_ARGS=""
+for lc_name in LC_ALL LC_CTYPE LC_MESSAGES LC_TIME LC_NUMERIC LC_COLLATE LC_MONETARY; do
+	lc_value="$(tr '\0' '\n' < "${ENVIRON_FILE}" | sed -n "s/^${lc_name}=//p" | head -n1)"
+	[ -z "${lc_value}" ] || LC_ENV_ARGS="${LC_ENV_ARGS}${lc_name}=${lc_value}
+"
+done
 
 # DISPLAYが取得できない場合は、どこにも再起動できないため何もしない
-# (fail-close。誤ったDISPLAYを推測して起動を試みない)。
+# (fail-close。誤ったDISPLAYを推測して起動を試みない)。LANG・
+# XDG_RUNTIME_DIR・LC_*は、取得できなくても再起動自体は行う
+# (fail-safe。上記コメント参照)。
 [ -n "${CONKY_DISPLAY}" ] || exit 0
 
 kill "${CONKY_PID}" 2>/dev/null || true
@@ -75,6 +115,20 @@ done
 set -- env "DISPLAY=${CONKY_DISPLAY}"
 [ -z "${CONKY_XAUTHORITY}" ] || set -- "$@" "XAUTHORITY=${CONKY_XAUTHORITY}"
 [ -z "${CONKY_HOME}" ] || set -- "$@" "HOME=${CONKY_HOME}"
+[ -z "${CONKY_LANG}" ] || set -- "$@" "LANG=${CONKY_LANG}"
+[ -z "${CONKY_XDG_RUNTIME_DIR}" ] || set -- "$@" "XDG_RUNTIME_DIR=${CONKY_XDG_RUNTIME_DIR}"
+
+# kill前に確定させたLC_*の "NAME=VALUE" 行を、1行ずつ引数として追加する。
+if [ -n "${LC_ENV_ARGS}" ]; then
+	old_ifs="${IFS}"
+	IFS='
+'
+	for lc_arg in ${LC_ENV_ARGS}; do
+		[ -z "${lc_arg}" ] || set -- "$@" "${lc_arg}"
+	done
+	IFS="${old_ifs}"
+fi
+
 set -- "$@" conky -p 3 -U
 
 runuser -u "${LIVE_USER}" -- "$@" >/dev/null 2>&1 &

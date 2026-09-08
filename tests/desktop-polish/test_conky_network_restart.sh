@@ -57,6 +57,34 @@ check "does not hardcode a literal DISPLAY value such as :0" \
 	sh -c '! grep -vE "^[[:space:]]*#" "$1" | grep -qE "DISPLAY=[\"]?:[0-9]"' _ "${DISPATCHER}"
 check "fail-closes (exit 0, no restart attempt) when DISPLAY cannot be determined" \
 	grep -qF '[ -n "${CONKY_DISPLAY}" ] || exit 0' "${DISPATCHER}"
+
+#==========================
+# 5commit目 (2026-09-08): LANG/XDG_RUNTIME_DIR/LC_*の引き継ぎ
+#
+# 背景: 4commit目のdispatcherはDISPLAY/XAUTHORITY/HOMEのみを引き継いで
+# いたため、実機で再起動後のConkyの日本語表示が文字化けし
+# (LANG未引き継ぎ)、起動モードが常にUnknownになる
+# (XDG_RUNTIME_DIR未引き継ぎ、mypocketos-boot-mode.luaがXDG_RUNTIME_DIR
+# 配下の状態ファイルを参照できないため)不具合が確認された。
+#==========================
+check "reads LANG from the running conky's own /proc/<pid>/environ (not hardcoded)" \
+	grep -qF "sed -n 's/^LANG=//p'" "${DISPATCHER}"
+check "reads XDG_RUNTIME_DIR from the running conky's own /proc/<pid>/environ (not hardcoded)" \
+	grep -qF "sed -n 's/^XDG_RUNTIME_DIR=//p'" "${DISPATCHER}"
+check "carries LANG over into the relaunched conky's environment" \
+	grep -qF '"LANG=${CONKY_LANG}"' "${DISPATCHER}"
+check "carries XDG_RUNTIME_DIR over into the relaunched conky's environment" \
+	grep -qF '"XDG_RUNTIME_DIR=${CONKY_XDG_RUNTIME_DIR}"' "${DISPATCHER}"
+check "LANG/XDG_RUNTIME_DIR are fail-safe (missing values do not block the restart, unlike DISPLAY)" \
+	sh -c '! grep -qF '"'"'[ -n "${CONKY_LANG}" ] || exit 0'"'"' "$1" && ! grep -qF '"'"'[ -n "${CONKY_XDG_RUNTIME_DIR}" ] || exit 0'"'"' "$1"' _ "${DISPATCHER}"
+check "handles LC_* via an explicit, bounded list of known variable names (not a wildcard/blind copy)" \
+	grep -qE 'for lc_name in( LC_[A-Z]+){2,}; do' "${DISPATCHER}"
+check "LC_ALL is included in the explicit LC_* list" \
+	grep -qE 'for lc_name in.*\bLC_ALL\b' "${DISPATCHER}"
+check "LC_* values are read from /proc/<pid>/environ per explicit name (not env -i / env dump)" \
+	grep -qF 'sed -n "s/^${lc_name}=//p"' "${DISPATCHER}"
+check "does not blindly copy the entire environ (no unfiltered pass-through of every NAME=VALUE line)" \
+	sh -c '! grep -qiE "env[[:space:]]+-[[:space:]]|xargs[[:space:]]+env|cat[[:space:]].*environ.*\\|[[:space:]]*env\\b" "$1"' _ "${DISPATCHER}"
 check "waits for the old process to actually exit before relaunching (bounded loop, not indefinite)" \
 	sh -c 'grep -qF "kill -0" "$1" && grep -qE "while \[ \"\\\$\{?i\}?\" -lt [0-9]+ \]" "$1"' _ "${DISPATCHER}"
 check "relaunches conky with the same flags as the original autostart line (-p 3 -U)" \
@@ -149,10 +177,14 @@ wait_until_dead() {
 	return 1
 }
 
-# シナリオ1: action=up、対象プロセスが存在し、DISPLAY/XAUTHORITY/HOMEが
-# すべて揃っている場合、旧プロセスがkillされ、runuserが正しい環境変数と
-# 引数で1回だけ呼ばれること。
-make_target_process DISPLAY=:42 XAUTHORITY=/tmp/fake-xauth HOME=/tmp/fake-home
+# シナリオ1: action=up、対象プロセスが存在し、DISPLAY/XAUTHORITY/HOME/
+# LANG/XDG_RUNTIME_DIR/LC_TIMEがすべて揃っている場合、旧プロセスがkillされ、
+# runuserが正しい環境変数と引数で1回だけ呼ばれること。無関係な変数
+# (UNRELATED_SECRET) は引き継がれないこと (無制限コピーになっていない
+# ことの確認)。
+make_target_process DISPLAY=:42 XAUTHORITY=/tmp/fake-xauth HOME=/tmp/fake-home \
+	LANG=ja_JP.UTF-8 XDG_RUNTIME_DIR=/tmp/fake-run-1000 LC_TIME=ja_JP.UTF-8 \
+	UNRELATED_SECRET=leakme
 PID1="${LAST_TARGET_PID}"
 run_dispatcher "${PID1}" "up"
 check "scenario1: old conky process is killed after action=up" \
@@ -165,6 +197,14 @@ check "scenario1: runuser call includes the recovered XAUTHORITY" \
 	grep -q 'XAUTHORITY=/tmp/fake-xauth' "${RUNUSER_CALLS}"
 check "scenario1: runuser call includes the recovered HOME" \
 	grep -q 'HOME=/tmp/fake-home' "${RUNUSER_CALLS}"
+check "scenario1: runuser call includes the recovered LANG" \
+	grep -q 'LANG=ja_JP.UTF-8' "${RUNUSER_CALLS}"
+check "scenario1: runuser call includes the recovered XDG_RUNTIME_DIR" \
+	grep -q 'XDG_RUNTIME_DIR=/tmp/fake-run-1000' "${RUNUSER_CALLS}"
+check "scenario1: runuser call includes the recovered LC_TIME (present in the source environment)" \
+	grep -q 'LC_TIME=ja_JP.UTF-8' "${RUNUSER_CALLS}"
+check "scenario1: runuser call does NOT include the unrelated variable (no unrestricted environ copy)" \
+	sh -c '! grep -q "UNRELATED_SECRET" "$1"' _ "${RUNUSER_CALLS}"
 check "scenario1: runuser call launches conky -p 3 -U" \
 	grep -q 'conky -p 3 -U' "${RUNUSER_CALLS}"
 # 万一プロセスが残っていた場合の後始末 (テスト自体の副作用を残さない)
@@ -199,6 +239,27 @@ check "scenario4: runuser was NOT called when DISPLAY is missing (fail-close)" \
 check "scenario4: existing process was left running when DISPLAY is missing (fail-close, no restart attempted)" \
 	process_is_alive "${PID4}"
 kill "${PID4}" 2>/dev/null || true
+wait 2>/dev/null || true
+
+# シナリオ5: action=up・DISPLAYは存在するが、LANG/XDG_RUNTIME_DIR/LC_*が
+# 環境変数に含まれない場合。DISPLAYさえあれば再起動自体は行う
+# (fail-safe。4commit目で実機確認された不具合の再発防止であり、
+# LANG/XDG_RUNTIME_DIRが無いことを理由に再起動そのものを止めては
+# ならない)。
+make_target_process DISPLAY=:99 HOME=/tmp/fake-home
+PID5="${LAST_TARGET_PID}"
+run_dispatcher "${PID5}" "up"
+check "scenario5: old conky process is killed even when LANG/XDG_RUNTIME_DIR are absent (fail-safe restart still happens)" \
+	wait_until_dead "${PID5}"
+check "scenario5: runuser was still called once (DISPLAY present is sufficient to attempt restart)" \
+	sh -c '[ "$(wc -l < "$1")" -eq 1 ]' _ "${RUNUSER_CALLS}"
+check "scenario5: runuser call includes DISPLAY" \
+	grep -q 'DISPLAY=:99' "${RUNUSER_CALLS}"
+check "scenario5: runuser call does not include a LANG entry (none was present to carry over)" \
+	sh -c '! grep -q "LANG=" "$1"' _ "${RUNUSER_CALLS}"
+check "scenario5: runuser call does not include an XDG_RUNTIME_DIR entry (none was present to carry over)" \
+	sh -c '! grep -q "XDG_RUNTIME_DIR=" "$1"' _ "${RUNUSER_CALLS}"
+kill "${PID5}" 2>/dev/null || true
 wait 2>/dev/null || true
 
 echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"

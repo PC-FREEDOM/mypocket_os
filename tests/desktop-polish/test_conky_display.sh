@@ -108,7 +108,7 @@ check "existing: ショートカット heading is present" \
 	sh -c 'printf "%s" "$1" | grep -qF "ショートカット\$color"' _ "${TEXT_BLOCK}"
 
 #==========================
-# 新規追加: ネットワーク表示 (2026-09-07 2nd fix、現行実装)
+# 新規追加: ネットワーク表示 (2026-09-07 2nd fix、取得ロジック現行実装)
 #
 # mypocketos-network.luaは廃止した。conky_parse()をLua ${lua ...} 呼び出し
 # 内から再帰的に呼ぶ実装は、実機で"attempt to call a nil value"という
@@ -116,6 +116,10 @@ check "existing: ショートカット heading is present" \
 # 静的にはPASSしていたが、この種の実行時限定の不具合は検出できなかった)。
 # 現行実装は、Conky変数の引数へ別のConky変数を直接ネストさせる
 # ${downspeed ${gw_iface}}/${upspeed ${gw_iface}}のみで完結する。
+#
+# 2026-09-08 (5commit目): 表示レイアウトを、「ネットワーク:」見出し+
+# 「Down:」「Up:」の3行表示から、「ネットワーク:  Down <値> / Up <値>」の
+# 1行表示へ変更した(取得ロジック自体・接続判定ロジック自体は無変更)。
 #==========================
 check "mypocketos-network.lua no longer exists (Lua helper removed, root cause of the 2nd bug)" \
 	sh -c '[ ! -e "$1" ]' _ "${NETWORK_LUA}"
@@ -132,9 +136,9 @@ check "network: has \${else} branches for the disconnected/ambiguous cases" \
 	sh -c 'n=$(printf "%s" "$1" | grep -o "\${else}" | wc -l); [ "$n" -ge 2 ]' _ "${TEXT_BLOCK}"
 check "network: disconnected fallback text is 未接続" \
 	sh -c 'printf "%s" "$1" | grep -qF "未接続"' _ "${TEXT_BLOCK}"
-check "network: Down: line uses \${downspeed \${gw_iface}} (nested, no Lua, no hardcoded interface)" \
+check "network: uses \${downspeed \${gw_iface}} (nested, no Lua, no hardcoded interface)" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${downspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
-check "network: Up: line uses \${upspeed \${gw_iface}} (nested, no Lua, no hardcoded interface)" \
+check "network: uses \${upspeed \${gw_iface}} (nested, no Lua, no hardcoded interface)" \
 	sh -c 'printf "%s" "$1" | grep -qF "\${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
 
 # 回帰防止: 過去2回の不具合を起こした実装に戻っていないことを確認する。
@@ -146,6 +150,25 @@ check "network: conky.text no longer uses \${if_gw} alone for the connectivity g
 	sh -c '! printf "%s" "$1" | grep -qF "\${if_gw}"' _ "${TEXT_BLOCK}"
 check "network: conky.text no longer calls \${lua mypocketos_network_ (1st-fix版のLuaヘルパー呼び出しへの回帰防止)" \
 	sh -c '! printf "%s" "$1" | grep -qF "\${lua mypocketos_network_"' _ "${TEXT_BLOCK}"
+
+#==========================
+# ネットワーク表示レイアウト (2026-09-08、5commit目: 1行表示)
+#==========================
+check "network: connected-state Down/Up are combined on a single line as \"Down <value> / Up <value>\"" \
+	sh -c 'printf "%s" "$1" | grep -qF "Down \${downspeed \${gw_iface}} / Up \${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
+check "network: the ネットワーク: heading and the Down/Up values are on the same physical line (connected state)" \
+	sh -c 'printf "%s\n" "$1" | grep -qE "ネットワーク:.*Down .*\\\${downspeed \\\${gw_iface}}.*Up .*\\\${upspeed \\\${gw_iface}}"' _ "${TEXT_BLOCK}"
+check "network: disconnected fallback (未接続) is on a single line with the ネットワーク: heading" \
+	sh -c 'printf "%s\n" "$1" | grep -qE "ネットワーク:\\\$color \\\${alignr}未接続"' _ "${TEXT_BLOCK}"
+check "network: no arrow glyphs (↓/↑/→/←) were introduced for the network display" \
+	sh -c '! printf "%s" "$1" | grep -qE "[↓↑→←]"' _ "${TEXT_BLOCK}"
+
+# 回帰防止: 旧3行表示 (見出し行 + インデントされた個別のDown:/Up:行) に
+# 戻っていないことを確認する。
+check "network: old 3-line layout (indented \"  Down:\" sub-line) is not present" \
+	sh -c '! printf "%s" "$1" | grep -qF "  Down:\$color"' _ "${TEXT_BLOCK}"
+check "network: old 3-line layout (indented \"  Up:\" sub-line) is not present" \
+	sh -c '! printf "%s" "$1" | grep -qF "  Up:\$color"' _ "${TEXT_BLOCK}"
 
 # lua_loadはmypocketos-boot-mode.luaのみを読み込み、mypocketos-network.lua
 # への参照が残っていないこと(1st-fix版からの後始末漏れがないことの確認)

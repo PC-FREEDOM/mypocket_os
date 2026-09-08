@@ -28,6 +28,16 @@
 # (dispatcherスクリプト自体の再起動ロジックを検証するものであり、
 # 実際のNetworkManager接続イベントは使わない)。
 #
+# 追記 (2026-09-08、5commit目): 4commit目入りISOの実機確認で、
+# dispatcher再起動自体はネットワーク速度表示について機能したが、
+# LANG/XDG_RUNTIME_DIRが再起動後のConkyへ引き継がれず、日本語表示の
+# 文字化け・起動モードのUnknown化が判明した。この対応
+# (dispatcherへのLANG/XDG_RUNTIME_DIR/LC_*引き継ぎ) も
+# test_conky_network_restart.shで検証しており、本スクリプトの対象では
+# ない。また同commitで、ネットワーク表示のレイアウトを3行表示から
+# 「ネットワーク: Down <値> / Up <値>」の1行表示へ変更したため、
+# 本スクリプトのDown/Up値チェックもこの1行表示に合わせて更新した。
+#
 # 【重要】このテストは4つの必須ローカルテストスイート
 # (tests/persistence, tests/edition-build, tests/desktop-polish,
 # tests/usb-persistence-image) の一部ではなく、
@@ -149,20 +159,22 @@ check "existing items rendered: ショートカット" grep -q 'ショートカ�
 check "existing items rendered: ウィンドウスナップ" grep -q 'ウィンドウスナップ' "${OUT_FILE}"
 check "network label rendered: ネットワーク" grep -q 'ネットワーク' "${OUT_FILE}"
 
-# 今回2回発生した不具合と同種の症状 (ラベルは出るが値だけ空欄になる) が
-# 無いことを確認する。「未接続」表示になっている場合はこのチェックを
+# 今回のこれまでの不具合と同種の症状 (ラベルは出るが値だけ空欄になる)
+# が無いことを確認する。「未接続」表示になっている場合はこのチェックを
 # 満たしたものとして扱う (未接続はfail-close方針として正しい挙動)。
-check "Down:/Up: values are not blank (or the 未接続 fallback is shown)" \
+# 2026-09-08 (5commit目): ネットワーク表示は「ネットワーク:」見出しと
+# Down/Upの値が同一行の1行表示 ("ネットワーク: Down <値> / Up <値>")
+# であるため、そのネットワーク行自体からDown/Upの値を抽出して確認する。
+check "network line's Down/Up values are not blank (or the 未接続 fallback is shown)" \
 	sh -c '
 	out="$1"
 	if grep -q "未接続" "${out}"; then
 		exit 0
 	fi
-	down_line="$(grep "Down:" "${out}" | head -n1)"
-	up_line="$(grep "Up:" "${out}" | head -n1)"
-	[ -n "${down_line}" ] && [ -n "${up_line}" ] || exit 1
-	down_val="$(printf "%s" "${down_line}" | sed "s/.*Down: *//")"
-	up_val="$(printf "%s" "${up_line}" | sed "s/.*Up: *//")"
+	network_line="$(grep "ネットワーク:" "${out}" | head -n1)"
+	[ -n "${network_line}" ] || exit 1
+	down_val="$(printf "%s" "${network_line}" | sed -n "s/.*Down \\(.*\\) \\/ Up.*/\\1/p")"
+	up_val="$(printf "%s" "${network_line}" | sed -n "s/.*Up \\(.*\\)$/\\1/p")"
 	[ -n "${down_val}" ] && [ -n "${up_val}" ]
 	' _ "${OUT_FILE}"
 
