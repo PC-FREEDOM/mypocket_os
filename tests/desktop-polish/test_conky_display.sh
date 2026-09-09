@@ -63,12 +63,17 @@
 # [${alignr}]自体・conky.textの文言・値・Network取得ロジック・
 # dispatcherには変更を加えていない)。
 #
-# 2026-09-09 (11commit目・現行): 10commit目入りISOのVM確認で、
+# 2026-09-09 (11commit目): 10commit目入りISOのVM確認で、
 # Network 1行表示・メモリ・ルートFS・カーネル・ショートカット・
 # Window Snap・日本語表示・右揃えレイアウトはいずれも正常だったが、
 # VMスクリーンショット上ではまだ右側に余白が見られ、「もうちょっと
 # 狭くてもいけそう」との評価があった。minimum_width/maximum_widthを
 # 300から292へさらに縮小した(変更対象はこの2値のみ)。
+#
+# 2026-09-09 (12commit目・現行): 11commit目入りISOのVM確認で、表示は
+# 正常だったが「変化が感じられません」との評価があり、依然として右側に
+# 余白が感じられた。minimum_width/maximum_widthを292から284へさらに
+# 縮小した(変更対象はこの2値のみ)。
 #
 # このテストスクリプト自体は実Conky・実Xを一切使用しない(静的解析の
 # み)。実バイナリでの検証はtests/desktop-polish/README.mdおよびレビュー
@@ -109,7 +114,7 @@ check "conky.config block was extracted (non-empty)" \
 	sh -c '[ -n "$1" ]' _ "${CONFIG_BLOCK}"
 
 #==========================
-# 固定幅化 (2026-09-08、6commit目、2026-09-09に10・11commit目で縮小)
+# 固定幅化 (2026-09-08、6commit目、2026-09-09に10・11・12commit目で縮小)
 #
 # 背景: ネットワーク速度・メモリ・ルートFS等の値が変化するたびに、
 # Conkyウィンドウ全体の横幅も変化してしまう不具合が実機で確認された。
@@ -133,6 +138,14 @@ check "conky.config block was extracted (non-empty)" \
 # そう」との評価があった。300から292へさらに縮小した(実測した自然な
 # 描画幅281pxに対して11pxの余裕を持つ値であり、依然として自然な
 # 描画幅を下回っていない)。
+#
+# 2026-09-09 (12commit目): 11commit目入りISOのVM確認で、表示は正常
+# だったが「変化が感じられません」との評価があり、依然として右側に
+# 余白が感じられた。292から284へさらに縮小した。想定しうる長めの値と
+# 複数のネットワーク速度例(Down 480KiB / Up 36.9KiB・Down 206KiB /
+# Up 5.87KiB)、より極端な想定(999.9MiB相当)のいずれについても、
+# 284px固定幅でクリッピング・折り返しがないことを実際にレンダリング
+# して確認した(推測による決め打ちではない)。
 #==========================
 check "minimum_width is set" \
 	sh -c 'printf "%s" "$1" | grep -qE "minimum_width[[:space:]]*=[[:space:]]*[0-9]+,"' _ "${CONFIG_BLOCK}"
@@ -150,10 +163,10 @@ check "the fixed width setting appears exactly once each (single, unambiguous so
 	max_count=$(printf "%s" "$1" | grep -oE "maximum_width[[:space:]]*=" | wc -l)
 	[ "$min_count" -eq 1 ] && [ "$max_count" -eq 1 ]
 	' _ "${CONFIG_BLOCK}"
-check "the fixed width is comfortably wider than the empirically-measured natural content width (281px, using the user's best-fit network reading Down 480KiB / Up 36.9KiB), not merely equal to it, and narrower than the 300/310px used in earlier commits (11commit-era tightening)" \
+check "the fixed width is comfortably wider than the empirically-measured natural content width (281px, using the user's best-fit network reading Down 480KiB / Up 36.9KiB), not merely equal to it, and narrower than the 292/300/310px used in earlier commits (12commit-era tightening)" \
 	sh -c '
 	min_val=$(printf "%s" "$1" | sed -nE "s/.*minimum_width[[:space:]]*=[[:space:]]*([0-9]+),.*/\1/p")
-	[ -n "$min_val" ] && [ "$min_val" -ge 282 ] && [ "$min_val" -le 300 ]
+	[ -n "$min_val" ] && [ "$min_val" -ge 282 ] && [ "$min_val" -le 291 ]
 	' _ "${CONFIG_BLOCK}"
 
 #==========================
