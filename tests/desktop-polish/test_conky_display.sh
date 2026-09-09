@@ -70,10 +70,24 @@
 # 狭くてもいけそう」との評価があった。minimum_width/maximum_widthを
 # 300から292へさらに縮小した(変更対象はこの2値のみ)。
 #
-# 2026-09-09 (12commit目・現行): 11commit目入りISOのVM確認で、表示は
+# 2026-09-09 (12commit目): 11commit目入りISOのVM確認で、表示は
 # 正常だったが「変化が感じられません」との評価があり、依然として右側に
 # 余白が感じられた。minimum_width/maximum_widthを292から284へさらに
 # 縮小した(変更対象はこの2値のみ)。
+#
+# 2026-09-09 (13commit目・幅の変更なし): ユーザーの本来の意図が
+# 「ショートカット・Window Snap欄も含めたパネル全体のスリム化」だったと
+# 判明したため、conky.textの各行を個別に分離した精密な実測調査を行った。
+# ショートカット・ウィンドウスナップはボトルネックではなく、実際の
+# ボトルネックはネットワーク行(実機VM確認済みの値だけで281px)である
+# ことが判明した。284pxからこれ以上安全に縮小する余地がほぼないと結論
+# づけ、幅は変更せず調査結果のみを報告した。
+#
+# 2026-09-09 (14commit目・現行): 13commit目の調査結果を受け、ユーザーは
+# メモリ・ルートFS・ネットワークの3行で、値と区切り記号("/")周辺の
+# 空白を削る案を選択した。これにより各行の自然な必要幅が縮小したため
+# (ネットワーク行: 281px→267px)、minimum_width/maximum_widthを284
+# から278へ縮小した。
 #
 # このテストスクリプト自体は実Conky・実Xを一切使用しない(静的解析の
 # み)。実バイナリでの検証はtests/desktop-polish/README.mdおよびレビュー
@@ -114,7 +128,7 @@ check "conky.config block was extracted (non-empty)" \
 	sh -c '[ -n "$1" ]' _ "${CONFIG_BLOCK}"
 
 #==========================
-# 固定幅化 (2026-09-08、6commit目、2026-09-09に10・11・12commit目で縮小)
+# 固定幅化 (2026-09-08、6commit目、2026-09-09に10・11・12・14commit目で縮小)
 #
 # 背景: ネットワーク速度・メモリ・ルートFS等の値が変化するたびに、
 # Conkyウィンドウ全体の横幅も変化してしまう不具合が実機で確認された。
@@ -146,6 +160,20 @@ check "conky.config block was extracted (non-empty)" \
 # Up 5.87KiB)、より極端な想定(999.9MiB相当)のいずれについても、
 # 284px固定幅でクリッピング・折り返しがないことを実際にレンダリング
 # して確認した(推測による決め打ちではない)。
+#
+# 2026-09-09 (13commit目、幅の変更なし): メモリ・ルートFS・ネットワーク
+# の各行を個別に分離した精密な実測により、実機VM確認済みの値だけで
+# 281pxを要し、284pxからこれ以上安全に縮小する余地がほぼないと判明
+# した。ユーザー指示の"999.9MiB"は、Conky自身のdownspeed/upspeedが
+# 実際に出力する有効数字3桁のパターンと整合しないと判明したため、
+# 以降は実際に出力されうる範囲での現実的な上限("99.9MiB"相当)を
+# 判断基準に用いている。
+#
+# 2026-09-09 (14commit目): メモリ・ルートFS・ネットワークの3行で、
+# 値と区切り記号("/")周辺の空白を削ったことで、各行の自然な必要幅が
+# 縮小した(ネットワーク行の実機VM確認済みの実測値: 281px→267px)。
+# これを基準に、284から278へ縮小した(実測値267pxに11px、Conky自身が
+# 実際に出力しうる上限[99.9MiB相当、274px]にも4pxの余裕を持つ値)。
 #==========================
 check "minimum_width is set" \
 	sh -c 'printf "%s" "$1" | grep -qE "minimum_width[[:space:]]*=[[:space:]]*[0-9]+,"' _ "${CONFIG_BLOCK}"
@@ -163,10 +191,10 @@ check "the fixed width setting appears exactly once each (single, unambiguous so
 	max_count=$(printf "%s" "$1" | grep -oE "maximum_width[[:space:]]*=" | wc -l)
 	[ "$min_count" -eq 1 ] && [ "$max_count" -eq 1 ]
 	' _ "${CONFIG_BLOCK}"
-check "the fixed width is comfortably wider than the empirically-measured natural content width (281px, using the user's best-fit network reading Down 480KiB / Up 36.9KiB), not merely equal to it, and narrower than the 292/300/310px used in earlier commits (12commit-era tightening)" \
+check "the fixed width is comfortably wider than the empirically-measured natural content width (267px after 14commit's space-trimming, using the user's best-fit network reading Down 480KiB/Up 36.9KiB), not merely equal to it, and narrower than the 284/292/300/310px used in earlier commits (14commit-era tightening)" \
 	sh -c '
 	min_val=$(printf "%s" "$1" | sed -nE "s/.*minimum_width[[:space:]]*=[[:space:]]*([0-9]+),.*/\1/p")
-	[ -n "$min_val" ] && [ "$min_val" -ge 282 ] && [ "$min_val" -le 291 ]
+	[ -n "$min_val" ] && [ "$min_val" -ge 274 ] && [ "$min_val" -le 283 ]
 	' _ "${CONFIG_BLOCK}"
 
 #==========================
@@ -270,10 +298,10 @@ check "network: conky.text no longer calls \${lua mypocketos_network_ (1st-fix�
 #==========================
 # ネットワーク表示レイアウト (2026-09-08、5commit目: 1行表示)
 #==========================
-check "network: connected-state Down/Up are combined on a single line as \"Down <value> ... / Up <value>\"" \
-	sh -c 'printf "%s" "$1" | grep -qF "Down \${downspeed \${gw_iface}}" && printf "%s" "$1" | grep -qF "/ Up \${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
+check "network: connected-state Down/Up are combined on a single line as \"Down <value>.../Up <value>\"" \
+	sh -c 'printf "%s" "$1" | grep -qF "Down \${downspeed \${gw_iface}}" && printf "%s" "$1" | grep -qF "/Up \${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
 check "network: the ネットワーク: heading and the Down/Up values are on the same physical line (connected state)" \
-	sh -c 'printf "%s\n" "$1" | grep -qE "ネットワーク:.*Down .*\\\${downspeed \\\${gw_iface}}.*/ Up .*\\\${upspeed \\\${gw_iface}}"' _ "${TEXT_BLOCK}"
+	sh -c 'printf "%s\n" "$1" | grep -qE "ネットワーク:.*Down .*\\\${downspeed \\\${gw_iface}}.*/Up .*\\\${upspeed \\\${gw_iface}}"' _ "${TEXT_BLOCK}"
 check "network: disconnected fallback (未接続) is on a single line with the ネットワーク: heading" \
 	sh -c 'printf "%s\n" "$1" | grep -qE "ネットワーク:\\\$color \\\${alignr}未接続"' _ "${TEXT_BLOCK}"
 check "network: no arrow glyphs (↓/↑/→/←) were introduced for the network display" \
@@ -287,7 +315,7 @@ check "network: old 3-line layout (indented \"  Up:\" sub-line) is not present" 
 	sh -c '! printf "%s" "$1" | grep -qF "  Up:\$color"' _ "${TEXT_BLOCK}"
 
 #==========================
-# メモリ・ルートFS・Network行のレイアウト (2026-09-08、9commit目・現行)
+# メモリ・ルートFS・Network行のレイアウト (2026-09-08、9commit目)
 #
 # 経緯: 6commit目でウィンドウ全体の横幅を固定した後、7commit目で
 # メモリ・ルートFS・ネットワークの各行に${goto x}を導入し、区切り文字
@@ -304,13 +332,31 @@ check "network: old 3-line layout (indented \"  Up:\" sub-line) is not present" 
 # 右寄せ位置(≒区切り文字の位置)が多少動くことは許容し、「行として
 # 自然に整って見えること」を優先する。minimum_width/maximum_width=310
 # によるウィンドウ全体の横幅固定(6commit目)は維持している。
+#
+# 2026-09-09 (14commit目・現行): 13commit目の調査で、実機VM確認済みの
+# ネットワーク速度表示だけで固定幅(284px当時)の必要幅にほぼ達しており
+# 縮小の余地がほぼないと判明した。ユーザーは、値と区切り記号("/")周辺
+# の空白を削る案を選択した。"${mem} / ${memmax}"のような「値 空白 /
+# 空白 値」という表記を、"${mem}/${memmax}"のように空白なしの表記へ
+# 変更した(メモリ・ルートFS・ネットワークの3行のみ。ラベル・
+# "Down"/"Up"という語句・${alignr}方式自体・値そのものには変更なし)。
+# これに伴い、固定幅もminimum_width/maximum_width=284→278へ縮小した。
 #==========================
-check "memory: line matches the 6commit-era \${alignr}-based layout exactly (no \${goto})" \
-	sh -c 'printf "%s" "$1" | grep -qF "メモリ:\$color \${alignr}\${mem} / \${memmax} (\${memperc}%)"' _ "${TEXT_BLOCK}"
-check "rootfs: line matches the 6commit-era \${alignr}-based layout exactly (no \${goto})" \
-	sh -c 'printf "%s" "$1" | grep -qF "ルートFS (/):\$color \${alignr}\${fs_used /} / \${fs_size /} (\${fs_used_perc /}%)"' _ "${TEXT_BLOCK}"
-check "network: connected-state branch matches the 6commit-era \${alignr}-based layout exactly (no \${goto})" \
-	sh -c 'printf "%s" "$1" | grep -qF "ネットワーク:\$color \${alignr}Down \${downspeed \${gw_iface}} / Up \${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
+check "memory: line matches the 14commit-era \${alignr}-based layout exactly (no space around the \"/\" separator, no \${goto})" \
+	sh -c 'printf "%s" "$1" | grep -qF "メモリ:\$color \${alignr}\${mem}/\${memmax} (\${memperc}%)"' _ "${TEXT_BLOCK}"
+check "rootfs: line matches the 14commit-era \${alignr}-based layout exactly (no space around the \"/\" separator, no \${goto})" \
+	sh -c 'printf "%s" "$1" | grep -qF "ルートFS (/):\$color \${alignr}\${fs_used /}/\${fs_size /} (\${fs_used_perc /}%)"' _ "${TEXT_BLOCK}"
+check "network: connected-state branch matches the 14commit-era \${alignr}-based layout exactly (no space around the \"/\" separator, no \${goto})" \
+	sh -c 'printf "%s" "$1" | grep -qF "ネットワーク:\$color \${alignr}Down \${downspeed \${gw_iface}}/Up \${upspeed \${gw_iface}}"' _ "${TEXT_BLOCK}"
+
+# 回帰防止: 13commit目までの「値 空白 / 空白 値」という表記(区切り記号
+# の前後に空白がある形式)へ戻っていないことを確認する。
+check "memory: no longer has a space before the \"/\" separator (regression guard against the pre-14commit spacing)" \
+	sh -c '! printf "%s" "$1" | grep -qF "\${mem} /"' _ "${TEXT_BLOCK}"
+check "rootfs: no longer has a space before the \"/\" separator (regression guard against the pre-14commit spacing)" \
+	sh -c '! printf "%s" "$1" | grep -qF "\${fs_used /} /"' _ "${TEXT_BLOCK}"
+check "network: no longer has a space before the \"/\" separator (regression guard against the pre-14commit spacing)" \
+	sh -c '! printf "%s" "$1" | grep -qF "\${downspeed \${gw_iface}} /"' _ "${TEXT_BLOCK}"
 
 # 回帰防止: 7・8commit目で導入した${goto}による固定カラム方式(座標値の
 # 新旧いずれも)へ戻っていないことを確認する。${goto}自体が
