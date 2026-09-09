@@ -110,10 +110,16 @@
 # 調査を行ったが、幅の値自体は変更していないため本スクリプトへの影響
 # なし。
 #
-# 追記 (2026-09-09、14commit目・現行): メモリ・ルートFS・ネットワークの
+# 追記 (2026-09-09、14commit目): メモリ・ルートFS・ネットワークの
 # 3行で、値と区切り記号("/")周辺の空白を削り、284から278へ縮小した。
 # Down/Up値抽出用の正規表現を新しい表記(空白なし)に合わせて更新した。
 # 実行して9シナリオすべてPASSすることを再確認した。
+#
+# 追記 (2026-09-09、15commit目・現行): 14commit目でも見た目の変化が
+# 感じられないとのVM評価があり、Network表示を1行表示から見出し行+
+# 「  Down:」「  Up:」の縦方向複数行表示へ戻し、278から262へ縮小した。
+# Down/Up値抽出用の正規表現を、それぞれの子行から個別に抽出する形へ
+# 変更した。実行して9シナリオすべてPASSすることを再確認した。
 #
 # 【重要】このテストは4つの必須ローカルテストスイート
 # (tests/persistence, tests/edition-build, tests/desktop-polish,
@@ -247,19 +253,25 @@ check "network label rendered: ネットワーク" grep -q 'ネットワーク' 
 # かった("Down <値>/ Up <値>")。9commit目で${goto}による固定カラム
 # 方式を撤回し${alignr}ベースの表示へ戻したため、値と"/"の間に空白が
 # 入る元の形式("Down <値> / Up <値>")に戻っている。
-# 2026-09-09 (14commit目・現行): メモリ・ルートFS・ネットワークの3行で、
-# 値と区切り記号("/")周辺の空白を削ったため("Down <値>/Up <値>")、
-# 抽出用の正規表現もこれに合わせて更新した。
-check "network line's Down/Up values are not blank (or the 未接続 fallback is shown)" \
+# 2026-09-09 (14commit目、15commit目で撤回済み): メモリ・ルートFS・
+# ネットワークの3行で、値と区切り記号("/")周辺の空白を削ったため
+# ("Down <値>/Up <値>")、抽出用の正規表現もこれに合わせて更新した。
+# 2026-09-09 (15commit目・現行): Network表示を1行表示から、見出し行
+# 「ネットワーク:」+子行「  Down: <値>」「  Up: <値>」の縦方向複数行
+# 表示へ戻したため、Down/Upの値をそれぞれの子行から個別に抽出する形へ
+# 変更した(out_to_console出力でも、${alignr}は単一の空白として現れる
+# のみで、値の抽出には影響しない)。
+check "network Down/Up values are not blank (or the 未接続 fallback is shown)" \
 	sh -c '
 	out="$1"
 	if grep -q "未接続" "${out}"; then
 		exit 0
 	fi
-	network_line="$(grep "ネットワーク:" "${out}" | head -n1)"
-	[ -n "${network_line}" ] || exit 1
-	down_val="$(printf "%s" "${network_line}" | sed -n "s#.*Down \\(.*\\)/Up.*#\\1#p")"
-	up_val="$(printf "%s" "${network_line}" | sed -n "s/.*Up \\(.*\\)$/\\1/p")"
+	down_line="$(grep "  Down:" "${out}" | head -n1)"
+	up_line="$(grep "  Up:" "${out}" | head -n1)"
+	[ -n "${down_line}" ] && [ -n "${up_line}" ] || exit 1
+	down_val="$(printf "%s" "${down_line}" | sed -n "s/.*Down: *\\(.*\\)/\\1/p")"
+	up_val="$(printf "%s" "${up_line}" | sed -n "s/.*Up: *\\(.*\\)/\\1/p")"
 	[ -n "${down_val}" ] && [ -n "${up_val}" ]
 	' _ "${OUT_FILE}"
 
