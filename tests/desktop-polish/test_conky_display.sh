@@ -48,12 +48,20 @@
 # ${goto x}による固定カラム方式は、VMでの見た目確認の結果、区切り文字
 # の位置はある程度固定できるものの、行ごとの空白が不自然でショート
 # カット欄のような整然とした印象にならないと評価された。2026-09-08
-# (9commit目・現行)、メモリ・ルートFS・ネットワークの3行を、6commit目
+# (9commit目)、メモリ・ルートFS・ネットワークの3行を、6commit目
 # までと同じ${alignr}ベースの右揃え表示へ戻した。値の桁数によって
 # 区切り文字の位置が多少動くことは許容し、「行として自然に整って見える
 # こと」を優先する方針へ変更した。minimum_width/maximum_width=310に
 # よるウィンドウ全体の横幅固定(6commit目)・Network取得ロジック・
 # dispatcherは変更していない。
+#
+# 2026-09-09 (10commit目・現行): 9commit目入りISOのVM確認で、
+# ${alignr}ベースの右揃え表示は7・8commit目より自然に見えると評価
+# されたが、実際の通信中(Down 480KiB / Up 36.9KiB程度)のNetwork行に
+# 対して310pxの固定幅はやや広すぎるとのフィードバックがあった。
+# minimum_width/maximum_widthを310から300へ縮小した(レイアウト方式
+# [${alignr}]自体・conky.textの文言・値・Network取得ロジック・
+# dispatcherには変更を加えていない)。
 #
 # このテストスクリプト自体は実Conky・実Xを一切使用しない(静的解析の
 # み)。実バイナリでの検証はtests/desktop-polish/README.mdおよびレビュー
@@ -94,15 +102,22 @@ check "conky.config block was extracted (non-empty)" \
 	sh -c '[ -n "$1" ]' _ "${CONFIG_BLOCK}"
 
 #==========================
-# 固定幅化 (2026-09-08、6commit目)
+# 固定幅化 (2026-09-08、6commit目、2026-09-09に10commit目で縮小)
 #
 # 背景: ネットワーク速度・メモリ・ルートFS等の値が変化するたびに、
 # Conkyウィンドウ全体の横幅も変化してしまう不具合が実機で確認された。
 # minimum_widthとmaximum_widthを同一値に設定することで、ウィンドウの
-# 横幅をほぼ固定する。値は、本セッションで実際にX11ディスプレイ・
-# 実フォントを使ってconky-std 1.22.1バイナリをレンダリングし、
-# 最も長くなりうる値を仮定した場合の実測描画幅(298px)を基準に決定した
-# (推測による決め打ちではない)。
+# 横幅をほぼ固定する。6commit目では、本セッションで実際にX11
+# ディスプレイ・実フォントを使ってconky-std 1.22.1バイナリを
+# レンダリングし、最も長くなりうる値を仮定した場合の実測描画幅
+# (298px)を基準に310を採用した(推測による決め打ちではない)。
+#
+# 2026-09-09 (10commit目): 9commit目入りISOのVM確認で、実際の通信中
+# (Down 480KiB / Up 36.9KiB程度)のNetwork行に対して310pxはやや広い
+# とのフィードバックがあった。想定しうる長めの値とユーザー提示の
+# ネットワーク速度例を組み合わせた内容を幅制約なしでレンダリングし、
+# 実測した自然な描画幅(281px)を基準に、300へ縮小した(推測による
+# 決め打ちではない)。
 #==========================
 check "minimum_width is set" \
 	sh -c 'printf "%s" "$1" | grep -qE "minimum_width[[:space:]]*=[[:space:]]*[0-9]+,"' _ "${CONFIG_BLOCK}"
@@ -120,10 +135,10 @@ check "the fixed width setting appears exactly once each (single, unambiguous so
 	max_count=$(printf "%s" "$1" | grep -oE "maximum_width[[:space:]]*=" | wc -l)
 	[ "$min_count" -eq 1 ] && [ "$max_count" -eq 1 ]
 	' _ "${CONFIG_BLOCK}"
-check "the fixed width is comfortably wider than the empirically-measured worst-case content width (298px), not merely equal to it" \
+check "the fixed width is comfortably wider than the empirically-measured natural content width (281px, using the user's best-fit network reading Down 480KiB / Up 36.9KiB), not merely equal to it, and narrower than the previous 310px (10commit-era tightening)" \
 	sh -c '
 	min_val=$(printf "%s" "$1" | sed -nE "s/.*minimum_width[[:space:]]*=[[:space:]]*([0-9]+),.*/\1/p")
-	[ -n "$min_val" ] && [ "$min_val" -ge 300 ] && [ "$min_val" -le 340 ]
+	[ -n "$min_val" ] && [ "$min_val" -ge 285 ] && [ "$min_val" -le 305 ]
 	' _ "${CONFIG_BLOCK}"
 
 #==========================
