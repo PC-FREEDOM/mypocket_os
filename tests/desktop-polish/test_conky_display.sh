@@ -89,13 +89,24 @@
 # (ネットワーク行: 281px→267px)、minimum_width/maximum_widthを284
 # から278へ縮小した。
 #
-# 2026-09-09 (15commit目・現行): 14commit目入りISOのVM確認で、区切り
+# 2026-09-09 (15commit目): 14commit目入りISOのVM確認で、区切り
 # 記号周辺の空白削除だけでは「変わってないようにしか見えません」との
 # 評価があり、Network表示を横1行に押し込む前提を見直した。Network行を
 # 見出し+「  Down:」「  Up:」の縦方向複数行表示へ戻したことで、
 # Network関連行の自然幅が大幅に縮小し、パネル幅のボトルネックが
 # ルートFS行(100%使用時256px)へ移った。minimum_width/maximum_widthを
 # 278から262へ縮小した。
+#
+# 2026-09-10 (16commit目・現行): 15commit目入りISOのVM確認では表示は
+# 正常だったが、ユーザーが求める「パネル全体が見た目で明確に細くなる」
+# という完成形には届いていなかった。Network分割後の新たなボトルネックが
+# ホスト名・カーネル・稼働時間・起動モード・CPU使用率・メモリ・ルートFS
+# という1行表示(ラベル+${alignr}値)に移っていたため、この7行も
+# 「ラベル行」+「半角スペース2文字分インデントした値行」の2段構成へ
+# 変更した。この結果、幅のボトルネックがショートカット最長行
+# ("ファイルマネージャー"、242px)へ移り、minimum_width/maximum_widthを
+# 262から248へ縮小した。ショートカット・ウィンドウスナップの文言・
+# 項目・キー割り当ては一切変更していない。
 #
 # このテストスクリプト自体は実Conky・実Xを一切使用しない(静的解析の
 # み)。実バイナリでの検証はtests/desktop-polish/README.mdおよびレビュー
@@ -183,7 +194,7 @@ check "conky.config block was extracted (non-empty)" \
 # これを基準に、284から278へ縮小した(実測値267pxに11px、Conky自身が
 # 実際に出力しうる上限[99.9MiB相当、274px]にも4pxの余裕を持つ値)。
 #
-# 2026-09-09 (15commit目・現行): 14commit目入りISOのVM確認で、区切り
+# 2026-09-09 (15commit目): 14commit目入りISOのVM確認で、区切り
 # 記号周辺の空白を削っただけでは見た目の変化が感じられないとの評価が
 # あり、Network表示を横1行に押し込む前提自体を見直した。Network行を
 # 見出し+「  Down:」「  Up:」の縦方向複数行表示へ戻したところ(下記
@@ -191,6 +202,18 @@ check "conky.config block was extracted (non-empty)" \
 # 大幅に縮小し、パネル幅のボトルネックがルートFS行(100%使用時256px)
 # へ移った。これを基準に、278から262へ縮小した(実測値256pxに6pxの
 # 余裕を持つ値)。
+#
+# 2026-09-10 (16commit目・現行): 15commit目入りISOのVM確認では表示は
+# 正常だったが、パネル全体の明確なスリム化には届いていなかった。
+# ホスト名・カーネル・稼働時間・起動モード・CPU使用率・メモリ・ルートFS
+# の7行を「ラベル行+インデント値行」の2段構成へ変更したところ(下記
+# 「システム情報行のレイアウト」節参照)、これらの行の自然幅は大幅に
+# 縮小したが、変更していないショートカット最長行("ファイル
+# マネージャー")が242pxを要することが判明し、これが新たなボトルネック
+# になった。これを基準に、262から248へ縮小した(実測値242pxに6pxの
+# 余裕を持つ値)。ユーザーが探索の目安として提示した230〜240px帯には、
+# ショートカット・ウィンドウスナップの文言を変更しない限り到達できない
+# ことも判明した(変更禁止のため、幅は変更しなかった)。
 #==========================
 check "minimum_width is set" \
 	sh -c 'printf "%s" "$1" | grep -qE "minimum_width[[:space:]]*=[[:space:]]*[0-9]+,"' _ "${CONFIG_BLOCK}"
@@ -208,10 +231,10 @@ check "the fixed width setting appears exactly once each (single, unambiguous so
 	max_count=$(printf "%s" "$1" | grep -oE "maximum_width[[:space:]]*=" | wc -l)
 	[ "$min_count" -eq 1 ] && [ "$max_count" -eq 1 ]
 	' _ "${CONFIG_BLOCK}"
-check "the fixed width is comfortably wider than the empirically-measured natural content width (256px at rootfs 100% usage, now the bottleneck row after 15commit split Network onto its own lines), not merely equal to it, and narrower than the 278/284/292/300/310px used in earlier commits (15commit-era tightening)" \
+check "the fixed width is comfortably wider than the empirically-measured natural content width (242px for the longest shortcut line, now the bottleneck after 16commit split the system-info rows onto their own lines), not merely equal to it, and narrower than the 262/278/284/292/300/310px used in earlier commits (16commit-era tightening)" \
 	sh -c '
 	min_val=$(printf "%s" "$1" | sed -nE "s/.*minimum_width[[:space:]]*=[[:space:]]*([0-9]+),.*/\1/p")
-	[ -n "$min_val" ] && [ "$min_val" -ge 258 ] && [ "$min_val" -le 267 ]
+	[ -n "$min_val" ] && [ "$min_val" -ge 244 ] && [ "$min_val" -le 253 ]
 	' _ "${CONFIG_BLOCK}"
 
 #==========================
@@ -356,7 +379,8 @@ check "network: connected-state Down/Up are no longer combined on a single line 
 	sh -c '! printf "%s" "$1" | grep -qE "ネットワーク:\\\$color \\\${alignr}Down"' _ "${TEXT_BLOCK}"
 
 #==========================
-# メモリ・ルートFS・Network行のレイアウト (2026-09-08、9commit目)
+# システム情報7行のレイアウト (2026-09-08、9commit目基本方式、
+# 2026-09-10 16commit目でラベル行+インデント値行の2段構成へ変更)
 #
 # 経緯: 6commit目でウィンドウ全体の横幅を固定した後、7commit目で
 # メモリ・ルートFS・ネットワークの各行に${goto x}を導入し、区切り文字
@@ -369,31 +393,55 @@ check "network: connected-state Down/Up are no longer combined on a single line 
 #
 # 対応: 9commit目で、メモリ・ルートFS・ネットワークの3行を、7・8commit
 # 目で導入した${goto x}による固定カラム方式から撤回し、6commit目まで
-# と同じ${alignr}ベースの右揃え表示へ戻した。値の桁数によって行全体の
-# 右寄せ位置(≒区切り文字の位置)が多少動くことは許容し、「行として
-# 自然に整って見えること」を優先する。minimum_width/maximum_width=310
-# によるウィンドウ全体の横幅固定(6commit目)は維持している。
+# と同じ${alignr}ベースの右揃え表示へ戻した。
 #
-# 2026-09-09 (14commit目): 13commit目の調査で、実機VM確認済みの
-# ネットワーク速度表示だけで固定幅(284px当時)の必要幅にほぼ達しており
-# 縮小の余地がほぼないと判明した。ユーザーは、値と区切り記号("/")周辺
-# の空白を削る案を選択した。"${mem} / ${memmax}"のような「値 空白 /
-# 空白 値」という表記を、"${mem}/${memmax}"のように空白なしの表記へ
-# 変更した(メモリ・ルートFS・ネットワークの3行のみ。ラベル・
-# "Down"/"Up"という語句・${alignr}方式自体・値そのものには変更なし)。
-# これに伴い、固定幅もminimum_width/maximum_width=284→278へ縮小した。
+# 2026-09-09 (14commit目): 値と区切り記号("/")周辺の空白を削った
+# ("${mem} / ${memmax}" → "${mem}/${memmax}"、メモリ・ルートFS・
+# ネットワークの3行のみ)。
 #
-# 2026-09-09 (15commit目・現行): 14commit目のVM確認でも見た目の変化が
-# 感じられないとの評価があり、Network行の1行表示自体を撤回し縦方向
+# 2026-09-09 (15commit目): Network行の1行表示自体を撤回し縦方向
 # 複数行表示へ戻した(上記「ネットワーク表示レイアウト」節参照)。
-# メモリ・ルートFSの2行は14commit目の空白なし表記のまま変更していない
-# (この2行はNetwork行を分割した結果、パネル幅のボトルネックではなく
-# なったため、変更する必要がなかった)。
+# メモリ・ルートFSの2行は14commit目の空白なし表記のまま変更していない。
+#
+# 2026-09-10 (16commit目・現行): 15commit目でNetwork行を縦方向複数行へ
+# 分割した結果、幅のボトルネックがメモリ・ルートFS等の1行表示(ラベル+
+# ${alignr}値)に移った。これを受け、ホスト名・カーネル・稼働時間・
+# 起動モード・CPU使用率・メモリ・ルートFSの計7行を、「ラベル行」+
+# 「半角スペース2文字分インデントした値行」の2段構成へ変更した。値行は
+# Network行のDown/Upとは異なり${alignr}を使わず、単純な左寄せ表示にした
+# (短い値が右端へ押しやられて左側に不自然な空白ができるのを避けるため。
+# ユーザー提示のイメージに合わせた判断)。値と区切り記号("/")周辺の
+# 空白なし表記(14commit目)は維持している。
 #==========================
-check "memory: line matches the 14commit-era \${alignr}-based layout exactly (no space around the \"/\" separator, no \${goto})" \
-	sh -c 'printf "%s" "$1" | grep -qF "メモリ:\$color \${alignr}\${mem}/\${memmax} (\${memperc}%)"' _ "${TEXT_BLOCK}"
-check "rootfs: line matches the 14commit-era \${alignr}-based layout exactly (no space around the \"/\" separator, no \${goto})" \
-	sh -c 'printf "%s" "$1" | grep -qF "ルートFS (/):\$color \${alignr}\${fs_used /}/\${fs_size /} (\${fs_used_perc /}%)"' _ "${TEXT_BLOCK}"
+check "hostname: label line and indented value line (2-line layout, 16commit目)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "\${color grey}ホスト名:\$color" | tail -n1 | grep -qxF "  \${nodename}"' _ "${TEXT_BLOCK}"
+check "kernel: label line and indented value line (2-line layout, 16commit目)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "\${color grey}カーネル:\$color" | tail -n1 | grep -qxF "  \${kernel}"' _ "${TEXT_BLOCK}"
+check "uptime: label line and indented value line (2-line layout, 16commit目)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "\${color grey}稼働時間:\$color" | tail -n1 | grep -qxF "  \${uptime}"' _ "${TEXT_BLOCK}"
+check "boot mode: label line and indented value line (2-line layout, 16commit目)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "\${color grey}起動モード:\$color" | tail -n1 | grep -qxF "  \${lua mypocketos_boot_mode}"' _ "${TEXT_BLOCK}"
+check "cpu usage: label line and indented value line (2-line layout, 16commit目)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "\${color grey}CPU使用率:\$color" | tail -n1 | grep -qxF "  \${cpu}%"' _ "${TEXT_BLOCK}"
+check "memory: label line and indented value line (2-line layout, 16commit目; still no space around the \"/\" separator, 14commit目)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "\${color grey}メモリ:\$color" | tail -n1 | grep -qxF "  \${mem}/\${memmax} (\${memperc}%)"' _ "${TEXT_BLOCK}"
+check "rootfs: label line and indented value line (2-line layout, 16commit目; still no space around the \"/\" separator, 14commit目)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "\${color grey}ルートFS (/):\$color" | tail -n1 | grep -qxF "  \${fs_used /}/\${fs_size /} (\${fs_used_perc /}%)"' _ "${TEXT_BLOCK}"
+
+check "cpu bar immediately follows the CPU usage value line (no unrelated line inserted between them)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "  \${cpu}%" | tail -n1 | grep -qxF "\${cpubar 6}"' _ "${TEXT_BLOCK}"
+check "memory bar immediately follows the memory value line (no unrelated line inserted between them)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "  \${mem}/\${memmax} (\${memperc}%)" | tail -n1 | grep -qxF "\${membar 6}"' _ "${TEXT_BLOCK}"
+check "rootfs bar immediately follows the rootfs value line (no unrelated line inserted between them)" \
+	sh -c 'printf "%s\n" "$1" | grep -A1 -xF "  \${fs_used /}/\${fs_size /} (\${fs_used_perc /}%)" | tail -n1 | grep -qxF "\${fs_bar 6 /}"' _ "${TEXT_BLOCK}"
+
+# 回帰防止: 6〜15commit目の「ラベル:$color ${alignr}値」という1行表示
+# (ホスト名・カーネル・稼働時間・起動モード・CPU使用率・メモリ・
+# ルートFS)へ戻っていないことを確認する。
+for label in 'ホスト名' 'カーネル' '稼働時間' '起動モード' 'CPU使用率' 'メモリ' 'ルートFS (/)'; do
+	check "${label} line no longer uses inline \${alignr} on the same line as the label (regression guard against the pre-16commit single-line layout)" \
+		sh -c '! printf "%s" "$1" | grep -qF "$2:\$color \${alignr}"' _ "${TEXT_BLOCK}" "${label}"
+done
 
 # 回帰防止: 13commit目までの「値 空白 / 空白 値」という表記(区切り記号
 # の前後に空白がある形式)へ戻っていないことを確認する。
@@ -408,14 +456,6 @@ check "rootfs: no longer has a space before the \"/\" separator (regression guar
 # 別の座標値で再導入された場合も検出できるようにする。
 check "no \${goto} anywhere in conky.text (regression guard against the 7/8commit-era fixed-column approach, rejected for looking uneven in VM testing)" \
 	sh -c '! printf "%s" "$1" | grep -qF "\${goto"' _ "${TEXT_BLOCK}"
-
-# 既存の${alignr}ベースの右寄せレイアウト自体は、単一値のみの行
-# (ホスト名・カーネル・稼働時間・起動モード・CPU使用率・未接続時の
-# ネットワーク) では変更していないことを確認する。
-for label in 'ホスト名' 'カーネル' '稼働時間' '起動モード' 'CPU使用率'; do
-	check "${label} line still uses \${alignr} for right-justification (unchanged, single-value row)" \
-		sh -c 'printf "%s" "$1" | grep -qF "$2:\$color \${alignr}"' _ "${TEXT_BLOCK}" "${label}"
-done
 
 # lua_loadはmypocketos-boot-mode.luaのみを読み込み、mypocketos-network.lua
 # への参照が残っていないこと(1st-fix版からの後始末漏れがないことの確認)
