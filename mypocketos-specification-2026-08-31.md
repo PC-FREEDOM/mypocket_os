@@ -683,6 +683,9 @@ Base／Standard VM確認済み。
   既定値と同じ値を明示)
 - `TappingDrag "on"`(タップ&ドラッグ)
 - `ScrollMethod "twofinger"`(2本指スクロール)
+- `NaturalScrolling "on"`(2026-09-10追加。指を下へ動かすと表示内容も
+  下へ動く向き。詳細はREADME「タッチパッド 2本指スクロール方向
+  (2026-09-10)」節参照)
 
 ファイル名`51-`は、`xserver-xorg-input-libinput`パッケージ提供の既定
 `40-libinput.conf`より後に読み込まれるようにするため。新規パッケージ
