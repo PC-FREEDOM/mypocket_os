@@ -305,6 +305,44 @@ HiDPI等を除いた派生サブセットです。** MyPocketOS独自のアイ�
 アーカイブは12,220ファイル・約57MB相当を単一tar.gzに圧縮したもので、
 リポジトリへのコミットサイズは展開状態より大幅に小さくなります。
 
+### Conkyシステム情報パネル (ネットワーク表示・Window Snap表示追加, 2026-09-10)
+
+設定ファイル: `/home/<user>/.config/conky/conky.conf`
+(`config/includes.chroot/etc/skel/.config/conky/conky.conf`としてスケルトン
+から配置。Base/Standard共通)。
+
+既存のシステム情報表示(MyPocketOS見出し・ホスト名・カーネル・稼働時間・
+起動モード・CPU使用率とバー・メモリとバー・ルートFSとバー・
+ショートカット5項目)は維持したうえで、以下を追加した。
+
+- **ネットワーク使用状況(Down/Up)**: `${gw_iface}`でdefault route
+  interfaceを取得し、`${downspeed ${gw_iface}}`/`${upspeed ${gw_iface}}`
+  でその速度を表示する。特定インターフェース名(`wlan0`/`eth0`等)は
+  ハードコードしていない。未接続時は「ネットワーク: 未接続」を表示する。
+- **NetworkManager dispatcherによるConky再起動**:
+  Conkyがネットワーク接続確立前に起動していると、Conkyプロセス内部の
+  ネットワークデバイス状態が更新されず、後から接続してもDown/Upが
+  0Bのまま変化しない問題があったため、
+  `config/includes.chroot/etc/NetworkManager/dispatcher.d/01-mypocketos-conky-restart`
+  で、接続確立イベント(`action=up`)のたびに既存Conkyプロセスを終了して
+  再起動する。再起動時は元プロセスの`/proc/<pid>/environ`から
+  `DISPLAY`・`XAUTHORITY`・`LANG`・`XDG_RUNTIME_DIR`等を引き継ぎ、
+  日本語表示・起動モード表示が再起動後も崩れないようにしている。
+- **Window Snapショートカット表示**: 既存ショートカット5項目の後に
+  区切り線・見出し付きで、`Super+Left`(左半分)・`Super+Right`(右半分)・
+  `Super+Up`(最大化)・`Super+Down`(最大化解除)を追加した。
+
+表示レイアウトは、ウィンドウ全体を`minimum_width`/`maximum_width`とも
+`262`(px)の固定幅とし、値の桁数変化でウィンドウが伸縮しないようにして
+いる。ホスト名・カーネル・稼働時間・起動モード・CPU使用率・メモリ・
+ルートFSのシステム情報7行は1行表示(ラベル+`${alignr}`右寄せ値)、
+ネットワークのみDown/Upを含め縦方向3行で表示する。日本語表示・
+起動モード(`Normal Live`等)表示は従来どおり正常に機能する。
+
+`tests/desktop-polish/test_conky_display.sh`・
+`tests/desktop-polish/test_conky_network_restart.sh`で静的/機能テスト
+済み(実Xorg・実Conky・実NetworkManagerは使用しない)。
+
 ### タッチパッド既定動作 (2026-09-06)
 
 ノートPCで起動した直後から、一般的なタッチパッド操作を機種やタッチパッド

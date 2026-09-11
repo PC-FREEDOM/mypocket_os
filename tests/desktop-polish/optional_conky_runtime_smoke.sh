@@ -1,0 +1,296 @@
+#!/bin/sh
+#
+# [オプション・非必須] Conky設定を実conkyバイナリで一時的に実行し、
+# 静的テスト (test_conky_display.sh) では検出できないランタイムエラー
+# (Lua実行時エラー、テンプレート構文の実行時不整合等) を確認する
+# smokeテスト。
+#
+# 背景 (2026-09-07): ネットワーク表示の実装で、静的テストは一貫して
+# PASSしていたにもかかわらず、実機のConkyプロセスでは2回続けて異なる
+# ランタイム限定の不具合 (1回目: 引数なし${downspeed}/${upspeed}が
+# default route interfaceを正しく選ばずDown/Upが常に0Bになる。2回目:
+# Luaヘルパー内でconky_parse()を再帰的に呼ぶことで
+# "attempt to call a nil value"というLua実行時エラーが発生し値が空欄に
+# なる) が発生した。grepベースの静的検証だけでは、この種の「実行して
+# 初めて分かる」問題を検出できないため、可能な範囲でこのオプション
+# テストを追加する。
+#
+# 【検討したが自動化しなかった項目】3回目の不具合 (Conkyがネットワーク
+# 接続確立前に起動していると、そのプロセスの生存中はDown/Upが0Bのまま
+# 変化しない) の再現・検出は、実際のNetworkManager接続状態遷移
+# (未接続→接続確立) を必要とし、CI・本スクリプトのようなヘッドレスな
+# 一時プロセス実行だけでは安全に再現できないため、本スクリプトには
+# 含めていない。この不具合への対応
+# (config/includes.chroot/etc/NetworkManager/dispatcher.d/
+# 01-mypocketos-conky-restart) の検証は、
+# tests/desktop-polish/test_conky_network_restart.shで、モック
+# pgrep/runuser + 実プロセス/実/proc/<pid>/environを使って行っている
+# (dispatcherスクリプト自体の再起動ロジックを検証するものであり、
+# 実際のNetworkManager接続イベントは使わない)。
+#
+# 追記 (2026-09-08、5commit目): 4commit目入りISOの実機確認で、
+# dispatcher再起動自体はネットワーク速度表示について機能したが、
+# LANG/XDG_RUNTIME_DIRが再起動後のConkyへ引き継がれず、日本語表示の
+# 文字化け・起動モードのUnknown化が判明した。この対応
+# (dispatcherへのLANG/XDG_RUNTIME_DIR/LC_*引き継ぎ) も
+# test_conky_network_restart.shで検証しており、本スクリプトの対象では
+# ない。また同commitで、ネットワーク表示のレイアウトを3行表示から
+# 「ネットワーク: Down <値> / Up <値>」の1行表示へ変更したため、
+# 本スクリプトのDown/Up値チェックもこの1行表示に合わせて更新した。
+#
+# 【検討したが自動化しなかった項目 (2026-09-08、6commit目)】5commit目
+# 入りISOの実機確認で、ネットワーク速度・メモリ・ルートFS等の値が
+# 変化するたびにConkyウィンドウ全体の横幅が変化する不具合が判明した
+# (対応: minimum_width/maximum_widthの固定化)。本スクリプトは
+# out_to_x=false (ヘッドレス、実際のXウィンドウを作成しない) で実行
+# するため、実際のウィンドウの描画ピクセル幅そのものを測定・確認する
+# ことはできない (out_to_x=falseでは、そもそもXウィンドウが作成されず
+# xwininfo等で測定する対象が存在しない)。実際のピクセル幅測定は、本
+# セッションの開発時にのみ、実際に稼働するX11ディスプレイ上でconkyを
+# 一時的に動かし、xwininfoで直接確認する形で行った(reports/ai-review/
+# 20260906-conky-system-network-polish.mdに手順と結果を記録)。この
+# 測定はテストスイートの一部として自動化しておらず、CI・本スクリプト
+# には含まれていない(ヘッドレス環境で安全に自動化できないため)。
+# 本スクリプトは、固定幅設定を含む新しいconky.confがエラーなく起動・
+# レンダリングできること(構文・Lua呼び出しレベルの検証)のみを確認
+# する。実際のウィンドウ幅が実機で意図どおり安定しているかどうかは、
+# 実機確認が必要である。
+#
+# 【検討したが自動化しなかった項目 (2026-09-08、7commit目)】メモリ・
+# ルートFS・ネットワークの各行で、区切り文字("/"・"(")の位置を
+# ${goto x}で固定した。out_to_console=trueのヘッドレス実行では
+# ${goto x}は単なる無演算(座標指定はXの描画位置にのみ影響し、
+# コンソール出力のテキストストリームには影響しない)であるため、
+# 実際に区切り文字の"ピクセル位置"が値の桁数によらず固定されている
+# ことをこのスクリプトで確認することはできない。このスクリプトが
+# 確認できるのは、${goto}を含む新しいテンプレートが構文エラー・
+# Lua実行時エラーなくレンダリングでき、既存の値(${mem}・${memmax}・
+# ${memperc}・${fs_used /}・${fs_size /}・${fs_used_perc /}・
+# ${downspeed}・${upspeed})が引き続き空欄にならず出力されることのみ。
+# 実際のピクセル位置固定の確認は、6commit目までと同様、本セッション
+# 開発時に実際のX11ディスプレイ上でconkyを動かしxwdで実測する形で
+# 行った(reports/ai-review/20260906-conky-system-network-polish.md
+# に手順と結果を記録)。この測定はテストスイートの一部として自動化
+# しておらず、CI・本スクリプトには含まれていない(ヘッドレス環境で
+# 安全に自動化できないため)。実機での位置固定確認は別途必要である。
+#
+# 追記 (2026-09-08、8commit目): 7commit目の予約幅(ASCII 9文字分)が
+# 実機で不自然な空白を生んだため、ASCII 7文字分へ縮小し${goto}の
+# 座標値を変更した。本スクリプトのロジック・チェック内容自体は変更
+# していない(座標値の変更はヘッドレス実行のテキストストリームには
+# 現れないため)。実行して9シナリオすべてPASSすることを再確認した。
+#
+# 追記 (2026-09-08、9commit目): 7・8commit目で導入した${goto x}
+# による固定カラム方式は、VMでの見た目確認の結果、行ごとの空白が不
+# 自然でショートカット欄のような整然とした印象にならないと評価され、
+# 撤回された。メモリ・ルートFS・ネットワークの3行を6commit目までと
+# 同じ${alignr}ベースの右揃え表示へ戻したことに伴い、ネットワーク行の
+# Down/Up値抽出用の正規表現を、値と"/"の間に空白がある元の形式
+# ("Down <値> / Up <値>")向けに戻した。実行して9シナリオすべてPASS
+# することを確認した。
+#
+# 追記 (2026-09-09、10commit目): VMでの見た目確認の結果、
+# 310pxの固定幅がやや広すぎるとのフィードバックがあり、300へ縮小
+# した。本スクリプトはヘッドレス実行のため実際のウィンドウ幅を測定
+# できず、幅設定の変更前後で本スクリプトのロジック・チェック内容は
+# 変更していない。実行して9シナリオすべてPASSすることを再確認した。
+#
+# 追記 (2026-09-09、11commit目): VMでの見た目確認の結果、
+# 300pxでもまだ右側に余白が見られるとのフィードバックがあり、292へ
+# さらに縮小した。本スクリプトのロジック・チェック内容は変更して
+# いない。実行して9シナリオすべてPASSすることを再確認した。
+#
+# 追記 (2026-09-09、12commit目): VMでの見た目確認の結果、
+# 292pxでも変化が感じられないとのフィードバックがあり、284へさらに
+# 縮小した。本スクリプトのロジック・チェック内容は変更していない。
+# 実行して9シナリオすべてPASSすることを再確認した。
+#
+# 追記 (2026-09-09、13commit目、幅の変更なし): ユーザーの本来の意図が
+# パネル全体のスリム化だったと判明し、各行を個別に分離した精密な実測
+# 調査を行ったが、幅の値自体は変更していないため本スクリプトへの影響
+# なし。
+#
+# 追記 (2026-09-09、14commit目): メモリ・ルートFS・ネットワークの
+# 3行で、値と区切り記号("/")周辺の空白を削り、284から278へ縮小した。
+# Down/Up値抽出用の正規表現を新しい表記(空白なし)に合わせて更新した。
+# 実行して9シナリオすべてPASSすることを再確認した。
+#
+# 追記 (2026-09-09、15commit目): 14commit目でも見た目の変化が
+# 感じられないとのVM評価があり、Network表示を1行表示から見出し行+
+# 「  Down:」「  Up:」の縦方向複数行表示へ戻し、278から262へ縮小した。
+# Down/Up値抽出用の正規表現を、それぞれの子行から個別に抽出する形へ
+# 変更した。実行して9シナリオすべてPASSすることを再確認した。
+#
+# 追記 (2026-09-10、16commit目): 15commit目でも「パネル全体が
+# 見た目で明確に細くなる」という完成形には届いておらず、Network分割後の
+# 新たなボトルネックがホスト名・カーネル・稼働時間・起動モード・CPU
+# 使用率・メモリ・ルートFSの1行表示に移っていたため、この7行も
+# 「ラベル行」+「インデント値行」の2段構成へ変更し、262から248へ縮小
+# した。本スクリプトの各checkは「ホスト名:」等のラベル文字列がconky出力
+# に含まれることのみを確認しており、ラベルと値が同一行か2行に分かれて
+# いるかには依存しないため、チェック内容自体は変更していない。実行して
+# 9シナリオすべてPASSすることを再確認した。
+#
+# 追記 (2026-09-10、17commit目・現行): 16commit目入りISOのVM確認で
+# 「個人的には前の並びのほうが好き」との評価があり、システム情報7行の
+# 2段構成を不採用として15commit目相当の1行表示へ戻し、248から262へ
+# 戻した。本スクリプトの各checkはラベル文字列の存在のみを確認しており、
+# 1行表示か2行表示かには依存しないため、チェック内容自体は変更して
+# いない。実行して9シナリオすべてPASSすることを再確認した。
+#
+# 【重要】このテストは4つの必須ローカルテストスイート
+# (tests/persistence, tests/edition-build, tests/desktop-polish,
+# tests/usb-persistence-image) の一部ではなく、
+# tests/desktop-polish/run.shからも呼び出されない。.github/workflows/の
+# CIからも実行されない。実conkyバイナリが必要であり、CI環境
+# (ubuntu-latest、Debianパッケージ未インストール)・素のgit checkout
+# 直後にはconkyバイナリが存在しないため、その場合は何もエラーにせず
+# SKIPして終了する (exit 0)。X (out_to_x) は使わず、out_to_x=false・
+# out_to_console=trueの一時設定でヘッドレスに実行する。
+#
+# 実conkyバイナリの探索順序 (システムへのインストールは一切行わない):
+#   1. $CONKY_BIN_OVERRIDE (明示指定、実行可能ファイル)
+#   2. PATH上のconkyコマンド
+#   3. 本リポジトリでこれまでに./scripts/build.shを実行済みであれば、
+#      chroot/usr/bin/conky (Git管理外のビルド生成物)。共有ライブラリ
+#      (liblua5.3-0・libimlib2t64) が不足している場合、
+#      cache/packages.chroot/ (これもGit管理外、build.shが取得した
+#      パッケージキャッシュ) 中の対応する.debから、一時ディレクトリへ
+#      dpkg-deb -xで展開してLD_LIBRARY_PATHで解決する
+#      (システムへのインストール・sudoは一切使わない)。
+#
+# 手動実行方法:
+#   tests/desktop-polish/optional_conky_runtime_smoke.sh
+#
+set -eu
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+CONKY_SKEL_DIR="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/conky"
+
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "${WORKDIR}"' EXIT
+
+skip() {
+	echo "SKIP: $1" >&2
+	echo "SCENARIOS=0 PASS=0 FAIL=0 (skipped: ${1})"
+	exit 0
+}
+
+CONKY_BIN=""
+EXTRA_LIB_PATH=""
+
+if [ -n "${CONKY_BIN_OVERRIDE:-}" ] && [ -x "${CONKY_BIN_OVERRIDE}" ]; then
+	CONKY_BIN="${CONKY_BIN_OVERRIDE}"
+elif command -v conky >/dev/null 2>&1; then
+	CONKY_BIN="$(command -v conky)"
+elif [ -x "${REPO_ROOT}/chroot/usr/bin/conky" ]; then
+	CANDIDATE="${REPO_ROOT}/chroot/usr/bin/conky"
+	if ldd "${CANDIDATE}" 2>/dev/null | grep -q 'not found'; then
+		LUA_DEB="$(find "${REPO_ROOT}/cache/packages.chroot" -maxdepth 1 -name 'liblua5.3-0_*.deb' 2>/dev/null | head -n1 || true)"
+		IMLIB_DEB="$(find "${REPO_ROOT}/cache/packages.chroot" -maxdepth 1 -name 'libimlib2*.deb' 2>/dev/null | head -n1 || true)"
+		if [ -n "${LUA_DEB}" ] && [ -n "${IMLIB_DEB}" ] && command -v dpkg-deb >/dev/null 2>&1; then
+			mkdir -p "${WORKDIR}/libs"
+			dpkg-deb -x "${LUA_DEB}" "${WORKDIR}/libs/lua" 2>/dev/null || true
+			dpkg-deb -x "${IMLIB_DEB}" "${WORKDIR}/libs/imlib2" 2>/dev/null || true
+			EXTRA_LIB_PATH="${WORKDIR}/libs/lua/usr/lib/x86_64-linux-gnu:${WORKDIR}/libs/imlib2/usr/lib/x86_64-linux-gnu"
+		fi
+		if [ -n "${EXTRA_LIB_PATH}" ] && ! LD_LIBRARY_PATH="${EXTRA_LIB_PATH}" ldd "${CANDIDATE}" 2>/dev/null | grep -q 'not found'; then
+			CONKY_BIN="${CANDIDATE}"
+		fi
+	else
+		CONKY_BIN="${CANDIDATE}"
+	fi
+fi
+
+[ -n "${CONKY_BIN}" ] || skip "実conkyバイナリが見つかりません (CI・素のgit checkout直後の想定どおりです)。static テスト (test_conky_display.sh) のみで検証してください。"
+
+command -v python3 >/dev/null 2>&1 || skip "python3が見つからないため、一時設定の生成をスキップします。"
+
+mkdir -p "${WORKDIR}/home/.config/conky"
+cp "${CONKY_SKEL_DIR}/conky.conf" "${WORKDIR}/home/.config/conky/conky.conf.orig"
+cp "${CONKY_SKEL_DIR}/mypocketos-boot-mode.lua" "${WORKDIR}/home/.config/conky/"
+
+SMOKE_CONF="${WORKDIR}/home/.config/conky/smoke.conf"
+python3 - "${WORKDIR}/home/.config/conky/conky.conf.orig" "${SMOKE_CONF}" << 'PYEOF'
+import re
+import sys
+
+src = open(sys.argv[1], encoding='utf-8').read()
+# out_to_x/out_to_consoleを上書きし、少数回の更新だけで終了するようにする
+# (productionのconky.confを直接編集せず、一時コピー上でのみ変更する)。
+src = re.sub(r'out_to_x\s*=\s*true', 'out_to_x = false', src)
+src = re.sub(r'out_to_console\s*=\s*false', 'out_to_console = true', src)
+src = src.replace('conky.config = {\n', 'conky.config = {\n    total_run_times = 3,\n', 1)
+open(sys.argv[2], 'w', encoding='utf-8').write(src)
+PYEOF
+
+OUT_FILE="${WORKDIR}/out.txt"
+if [ -n "${EXTRA_LIB_PATH}" ]; then
+	HOME="${WORKDIR}/home" LD_LIBRARY_PATH="${EXTRA_LIB_PATH}" timeout 20 "${CONKY_BIN}" -c "${SMOKE_CONF}" >"${OUT_FILE}" 2>&1 || true
+else
+	HOME="${WORKDIR}/home" timeout 20 "${CONKY_BIN}" -c "${SMOKE_CONF}" >"${OUT_FILE}" 2>&1 || true
+fi
+
+PASS=0
+FAIL=0
+
+check() {
+	desc="$1"
+	shift
+	if "$@"; then
+		PASS=$((PASS + 1))
+	else
+		echo "FAIL: ${desc}" >&2
+		echo "----- conky output -----" >&2
+		cat "${OUT_FILE}" >&2
+		echo "-------------------------" >&2
+		FAIL=$((FAIL + 1))
+	fi
+}
+
+check "conky produced output" test -s "${OUT_FILE}"
+check "no Lua runtime error (attempt to call/index a nil value)" \
+	sh -c '! grep -qi "attempt to call a nil value\|attempt to index a nil value" "$1"' _ "${OUT_FILE}"
+check "no llua execution-failure message" \
+	sh -c '! grep -qi "execution failed"' _ "${OUT_FILE}" < "${OUT_FILE}"
+check "existing items rendered: MyPocketOS heading" grep -q 'MyPocketOS' "${OUT_FILE}"
+check "existing items rendered: ホスト名" grep -q 'ホスト名:' "${OUT_FILE}"
+check "existing items rendered: ショートカット" grep -q 'ショートカット' "${OUT_FILE}"
+check "existing items rendered: ウィンドウスナップ" grep -q 'ウィンドウスナップ' "${OUT_FILE}"
+check "network label rendered: ネットワーク" grep -q 'ネットワーク' "${OUT_FILE}"
+
+# 今回のこれまでの不具合と同種の症状 (ラベルは出るが値だけ空欄になる)
+# が無いことを確認する。「未接続」表示になっている場合はこのチェックを
+# 満たしたものとして扱う (未接続はfail-close方針として正しい挙動)。
+# 2026-09-08 (5commit目): ネットワーク表示は「ネットワーク:」見出しと
+# Down/Upの値が同一行の1行表示 ("ネットワーク: Down <値> / Up <値>")
+# であるため、そのネットワーク行自体からDown/Upの値を抽出して確認する。
+# 2026-09-08 (7commit目、9commit目で撤回済み): "/" の直前に${goto x}を
+# 挿入していた期間は、out_to_console出力で値と"/"の間に空白が入らな
+# かった("Down <値>/ Up <値>")。9commit目で${goto}による固定カラム
+# 方式を撤回し${alignr}ベースの表示へ戻したため、値と"/"の間に空白が
+# 入る元の形式("Down <値> / Up <値>")に戻っている。
+# 2026-09-09 (14commit目、15commit目で撤回済み): メモリ・ルートFS・
+# ネットワークの3行で、値と区切り記号("/")周辺の空白を削ったため
+# ("Down <値>/Up <値>")、抽出用の正規表現もこれに合わせて更新した。
+# 2026-09-09 (15commit目・現行): Network表示を1行表示から、見出し行
+# 「ネットワーク:」+子行「  Down: <値>」「  Up: <値>」の縦方向複数行
+# 表示へ戻したため、Down/Upの値をそれぞれの子行から個別に抽出する形へ
+# 変更した(out_to_console出力でも、${alignr}は単一の空白として現れる
+# のみで、値の抽出には影響しない)。
+check "network Down/Up values are not blank (or the 未接続 fallback is shown)" \
+	sh -c '
+	out="$1"
+	if grep -q "未接続" "${out}"; then
+		exit 0
+	fi
+	down_line="$(grep "  Down:" "${out}" | head -n1)"
+	up_line="$(grep "  Up:" "${out}" | head -n1)"
+	[ -n "${down_line}" ] && [ -n "${up_line}" ] || exit 1
+	down_val="$(printf "%s" "${down_line}" | sed -n "s/.*Down: *\\(.*\\)/\\1/p")"
+	up_val="$(printf "%s" "${up_line}" | sed -n "s/.*Up: *\\(.*\\)/\\1/p")"
+	[ -n "${down_val}" ] && [ -n "${up_val}" ]
+	' _ "${OUT_FILE}"
+
+echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"
+[ "${FAIL}" -eq 0 ]
