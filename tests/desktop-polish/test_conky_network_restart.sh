@@ -87,8 +87,12 @@ check "does not blindly copy the entire environ (no unfiltered pass-through of e
 	sh -c '! grep -qiE "env[[:space:]]+-[[:space:]]|xargs[[:space:]]+env|cat[[:space:]].*environ.*\\|[[:space:]]*env\\b" "$1"' _ "${DISPATCHER}"
 check "waits for the old process to actually exit before relaunching (bounded loop, not indefinite)" \
 	sh -c 'grep -qF "kill -0" "$1" && grep -qE "while \[ \"\\\$\{?i\}?\" -lt [0-9]+ \]" "$1"' _ "${DISPATCHER}"
-check "relaunches conky with the same flags as the original autostart line (-p 3 -U)" \
-	grep -qF 'set -- "$@" conky -p 3 -U' "${DISPATCHER}"
+check "relaunches conky with -U (unique) and no startup pause (-p 0, intentionally shorter than autostart's -p 3; see 2026-09-11 comments)" \
+	grep -qF 'set -- "$@" conky -p 0 -U' "${DISPATCHER}"
+check "the relaunch invocation itself no longer uses the old -p 3 (historical mentions of -p 3 in comments are unaffected)" \
+	sh -c '! grep -qF "set -- \"\$@\" conky -p 3 -U" "$1"' _ "${DISPATCHER}"
+check "the relaunch invocation itself no longer uses the intermediate -p 1 (historical mentions of -p 1 in comments are unaffected)" \
+	sh -c '! grep -qF "set -- \"\$@\" conky -p 1 -U" "$1"' _ "${DISPATCHER}"
 check "relaunches via runuser (already available on Debian, no new package/dependency)" \
 	grep -qF 'runuser -u "${LIVE_USER}"' "${DISPATCHER}"
 check "no specific network interface name is referenced (\$1/INTERFACE unused for branching)" \
@@ -205,8 +209,8 @@ check "scenario1: runuser call includes the recovered LC_TIME (present in the so
 	grep -q 'LC_TIME=ja_JP.UTF-8' "${RUNUSER_CALLS}"
 check "scenario1: runuser call does NOT include the unrelated variable (no unrestricted environ copy)" \
 	sh -c '! grep -q "UNRELATED_SECRET" "$1"' _ "${RUNUSER_CALLS}"
-check "scenario1: runuser call launches conky -p 3 -U" \
-	grep -q 'conky -p 3 -U' "${RUNUSER_CALLS}"
+check "scenario1: runuser call launches conky -p 0 -U (no pause, 2026-09-11)" \
+	grep -q 'conky -p 0 -U' "${RUNUSER_CALLS}"
 # 万一プロセスが残っていた場合の後始末 (テスト自体の副作用を残さない)
 kill "${PID1}" 2>/dev/null || true
 
