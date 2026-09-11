@@ -328,6 +328,9 @@ HiDPI等を除いた派生サブセットです。** MyPocketOS独自のアイ�
   再起動する。再起動時は元プロセスの`/proc/<pid>/environ`から
   `DISPLAY`・`XAUTHORITY`・`LANG`・`XDG_RUNTIME_DIR`等を引き継ぎ、
   日本語表示・起動モード表示が再起動後も崩れないようにしている。
+  再起動時のConky起動オプションは`-p 1 -U`(2026-09-11、Wi-Fi接続時の
+  再表示までの空白時間を短縮するため、ログイン時autostartの`-p 3`
+  より短縮。詳細は`reports/ai-review/`の関連レポート参照)。
 - **Window Snapショートカット表示**: 既存ショートカット5項目の後に
   区切り線・見出し付きで、`Super+Left`(左半分)・`Super+Right`(右半分)・
   `Super+Up`(最大化)・`Super+Down`(最大化解除)を追加した。
