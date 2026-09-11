@@ -360,7 +360,9 @@ HiDPI等を除いた派生サブセットです。** MyPocketOS独自のアイ�
   - タップ&ドラッグ(1本指タップ後そのまま指を置き続けるとドラッグ)
   - 物理クリック(ボタン)は従来どおり使用可能
 - 設定したlibinputオプション: `Tapping "on"`・`TappingButtonMap "lrm"`・
-  `TappingDrag "on"`・`ScrollMethod "twofinger"`。
+  `TappingDrag "on"`・`ScrollMethod "twofinger"`・`NaturalScrolling "on"`
+  (2本指スクロールの方向。詳細は下記「タッチパッド 2本指スクロール方向
+  (2026-09-10)」節参照)。
 - `InputClass`セクションは`MatchIsTouchpad "on"`(デバイス名・vendor ID
   等のハードコードなし)でlibinputがタッチパッドと分類したデバイスにのみ
   適用され、マウス・トラックポイント(pointing stick)・タッチスクリーン
@@ -435,6 +437,30 @@ branch `feat/touchpad-defaults` (commit
   `xinput list-props`によるlibinputプロパティ(`libinput Tapping
   Enabled`等)の直接確認は未実施のまま残っている。
 - トラックポイント(pointing stick)搭載機での確認は今回実施していない。
+
+### タッチパッド 2本指スクロール方向 (2026-09-10)
+
+branch `feat/touchpad-natural-scrolling`で、`51-mypocketos-touchpad.conf`
+に`NaturalScrolling "on"`を追加した。
+
+**背景**: PR #41 (branch `feat/touchpad-defaults`) の実機確認時点では
+`NaturalScrolling`は未設定であり、libinputドライバの既定(無効)が
+適用されていた。この状態では、指を下へ動かすとスクロールバーを下げる
+のと同じ向き、すなわち表示内容が上へ動く「従来型」スクロールになる。
+ユーザーからのフィードバックで、指を下へ動かしたときに表示内容も下へ
+動く(タッチスクリーンの操作感に近い)挙動を希望する旨があったため、
+`man 4 libinput`(実機`xserver-xorg-input-libinput`パッケージ付属の
+man page)の`Option "NaturalScrolling" "bool"`(`Enables or disables
+natural scrolling behavior.`)の定義を確認したうえで、`NaturalScrolling
+"on"`を明示的に設定した。
+
+`MatchIsTouchpad "on"`セクション内のみへの適用のため、USBマウスの
+ホイール方向には影響しない設計(既存のマウス副作用なしの設計を維持)。
+
+`tests/desktop-polish/test_touchpad.sh`に`NaturalScrolling "on"`の
+アサーションを追加し、静的/モック確認済み。実機での2本指スクロール
+方向の確認、およびUSBマウスホイール方向に副作用がないことの確認は、
+本ドキュメント作成時点では**未実施**(実機検証待ち)。
 - Bluetoothマウスでの確認は今回実施していない。
 - 実機テスト中、一度動作が重くなった後の再起動時に、systemd-journaldの
   `Failed to send WATCHDOG=1 notification message: Transport endpoint

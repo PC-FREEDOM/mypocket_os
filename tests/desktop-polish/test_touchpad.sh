@@ -70,6 +70,7 @@ assert opt(body, 'Tapping') == 'on', f'Tapping={opt(body, \"Tapping\")}'
 assert opt(body, 'TappingButtonMap') == 'lrm', f'TappingButtonMap={opt(body, \"TappingButtonMap\")}'
 assert opt(body, 'TappingDrag') == 'on', f'TappingDrag={opt(body, \"TappingDrag\")}'
 assert opt(body, 'ScrollMethod') == 'twofinger', f'ScrollMethod={opt(body, \"ScrollMethod\")}'
+assert opt(body, 'NaturalScrolling') == 'on', f'NaturalScrolling={opt(body, \"NaturalScrolling\")}'
 
 # デバイス名・vendor/product IDのハードコードがないこと
 forbidden_matches = ['MatchProduct', 'MatchVendor', 'MatchUSBID', 'MatchTag']
@@ -84,7 +85,7 @@ for s in sections:
         continue
     for name in other_class_matches:
         if has_match(s, name):
-            for key in ('Tapping', 'TappingButtonMap', 'TappingDrag', 'ScrollMethod'):
+            for key in ('Tapping', 'TappingButtonMap', 'TappingDrag', 'ScrollMethod', 'NaturalScrolling'):
                 assert opt(s, key) is None, f'{name} section unexpectedly sets {key}'
 "
 
