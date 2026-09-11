@@ -110,9 +110,10 @@ tests/desktop-polish/test_conky_network_restart.sh
   確認したうえで、モック`pgrep`/`runuser`と実プロセス・実
   `/proc/<pid>/environ`を使って、次を機能的に検証する:
   (1) 接続確立時に対象プロセスがkillされ、`runuser`が recovered
-  DISPLAY/XAUTHORITY/HOMEと`conky -p 1 -U`(2026-09-11、Wi-Fi接続時の
-  再表示遅延短縮のため`-p 3`から変更。autostart側の`-p 3`は維持)で
-  正しく1回呼ばれること、
+  DISPLAY/XAUTHORITY/HOMEと`conky -p 0 -U`(2026-09-11、Wi-Fi接続時の
+  再表示遅延短縮のため`-p 3`→`-p 1`→`-p 0`と段階的に変更。実機確認で
+  `-p 1`でも体感上の空白時間が残ったため`-p 0`へ再調整した。autostart側
+  の`-p 3`は維持)で正しく1回呼ばれること、
   (2) 切断時 (`action=down`) は何もしないこと、(3) 対象プロセスが
   存在しない場合は何もしないこと、(4) DISPLAYを取得できない場合は
   fail-closeで再起動を試みず、既存プロセスにも触れないこと。実root権限・
