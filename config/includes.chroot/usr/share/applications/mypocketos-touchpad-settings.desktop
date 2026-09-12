@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Touchpad Settings
+Name[ja]=タッチパッド設定
+GenericName=Touchpad Settings
+GenericName[ja]=タッチパッド設定
+Comment=Configure touchpad tap, scrolling and pointer speed
+Comment[ja]=タッチパッドの動作を設定します
+Exec=mypocketos-touchpad-settings
+Icon=preferences-desktop-touchpad
+Terminal=false
+Categories=Settings;DesktopSettings;

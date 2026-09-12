@@ -20,6 +20,7 @@ AUTOSTART="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/openbox/autostar
 COMMON_LIST="${REPO_ROOT}/config/package-lists.d/mypocketos-common.list.chroot"
 APPEND_CSV="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/jgmenu/append.csv"
 ICON_ARCHIVE="${REPO_ROOT}/config/includes.chroot/usr/share/mypocketos/icon-themes/MyPocketOS-Fluent-yellow.tar.gz"
+DESKTOP_FILE="${REPO_ROOT}/config/includes.chroot/usr/share/applications/mypocketos-touchpad-settings.desktop"
 
 PASS=0
 FAIL=0
@@ -76,20 +77,32 @@ check "autostart invokes mypocketos-touchpad-settings --apply" \
 check "autostart syntax is valid (sh -n)" sh -n "${AUTOSTART}"
 check "autostart syntax is valid (dash -n)" dash -n "${AUTOSTART}"
 
-# ---- アプリメニュー登録 (append.csv、jgmenu csv_cmd=apps が末尾に付加する) ----
-check "append.csv registers a 'タッチパッド設定' entry" \
-	grep -q 'タッチパッド設定' "${APPEND_CSV}"
-check "append.csv entry launches mypocketos-touchpad-settings with no arguments (GUI mode)" \
-	grep -qE '^タッチパッド設定,mypocketos-touchpad-settings(,|$)' "${APPEND_CSV}"
-check "append.csv entry specifies the preferences-desktop-touchpad icon (jgmenu Fields (3) icon)" \
-	grep -qF 'タッチパッド設定,mypocketos-touchpad-settings,preferences-desktop-touchpad' "${APPEND_CSV}"
+# ---- アプリメニュー登録 (.desktop、jgmenu-apps内蔵schemaのSettingsカテゴリへ
+#      Categories=Settings; で自動分類させる。トップ階層への直接表示はしない) ----
+check ".desktop file exists" test -f "${DESKTOP_FILE}"
+check ".desktop file is valid per desktop-entry-spec (desktop-file-validate, if available)" \
+	sh -c 'command -v desktop-file-validate >/dev/null 2>&1 || exit 0; desktop-file-validate "$1"' _ "${DESKTOP_FILE}"
+check ".desktop Exec= launches mypocketos-touchpad-settings with no arguments (GUI mode)" \
+	grep -qx 'Exec=mypocketos-touchpad-settings' "${DESKTOP_FILE}"
+check ".desktop Icon= specifies preferences-desktop-touchpad (unchanged from previous revision)" \
+	grep -qx 'Icon=preferences-desktop-touchpad' "${DESKTOP_FILE}"
+check ".desktop Categories= includes Settings (so jgmenu-apps nests it under the existing 設定 category, not the top level)" \
+	sh -c "sed -n 's/^Categories=//p' \"\$1\" | grep -qE '(^|;)Settings(;|\$)'" _ "${DESKTOP_FILE}"
+check ".desktop has a Japanese Name (Name[ja]) for the ja_JP.UTF-8 locale" \
+	grep -qx 'Name\[ja\]=タッチパッド設定' "${DESKTOP_FILE}"
 check "the referenced icon actually exists in the committed MyPocketOS-Fluent-yellow icon theme archive (no new image asset added)" \
 	sh -c 'tar tzf "$1" 2>/dev/null | grep -q "scalable/apps/preferences-desktop-touchpad.svg$"' _ "${ICON_ARCHIVE}"
+check "タッチパッド設定 is NOT registered as a top-level append.csv entry (comments mentioning it are fine; only the .desktop file is the entry point)" \
+	sh -c '! grep -vE "^[[:space:]]*#" "$1" | grep -qE "^タッチパッド設定,"' _ "${APPEND_CSV}"
+check "no other new .desktop file was introduced besides mypocketos-touchpad-settings.desktop" \
+	sh -c '[ "$(find "$1" -iname "*.desktop" 2>/dev/null | wc -l)" -eq 1 ]' _ "${REPO_ROOT}/config/includes.chroot"
 check "existing append.csv entries (永続領域を作成 etc.) are still intact" \
 	grep -q '永続領域を作成' "${APPEND_CSV}"
-check "no new .desktop file was introduced (menu registration uses append.csv only, per existing convention)" \
-	sh -c '[ "$(find "$1" -iname "*.desktop" 2>/dev/null | wc -l)" -eq 0 ]' _ "${REPO_ROOT}/config/includes.chroot"
-check "jgmenurc still uses csv_cmd=apps (append.csv is auto-appended, no menu-generation config change needed)" \
+check "existing append.csv entry (Openbox再設定) is still intact" \
+	grep -q 'Openbox再設定' "${APPEND_CSV}"
+check "existing append.csv power submenu entries are still intact" \
+	sh -c 'grep -q "ログアウト" "$1" && grep -q "再起動" "$1" && grep -q "電源オフ" "$1"' _ "${APPEND_CSV}"
+check "jgmenurc still uses csv_cmd=apps (no menu-generation config change needed for category-based placement)" \
 	grep -qE '^csv_cmd[[:space:]]*=[[:space:]]*apps' "${REPO_ROOT}/config/includes.chroot/etc/skel/.config/jgmenu/jgmenurc"
 
 #==========================

@@ -8,14 +8,17 @@
 # まとめた一般ユーザー権限のGUI本体 mypocketos-persistence-setup へ委譲する。
 # (実際に jgmenu-apps で生成し、この内容が末尾に含まれることを確認済み)
 #
-# タッチパッド設定 (2026-09-12追加): mypocketos-touchpad-settings (GUI本体、
-# 一般ユーザー権限のみで完結、rootは不要) を委譲する。アイコンは
-# 追加画像を増やさず、既存のMyPocketOS-Fluent-yellowアイコンテーマに
-# 既に収録されている scalable/apps/preferences-desktop-touchpad.svg を
-# 名前解決 (jgmenu(1) Fields (3) icon) で利用する。
+# タッチパッド設定は、ここ(append.csv、常にルートメニュー直下に追加される)
+# ではなく .desktop ファイル
+# (config/includes.chroot/usr/share/applications/mypocketos-touchpad-settings.desktop)
+# として登録している。jgmenu-apps は Categories=Settings; を持つ.desktopを
+# 内蔵schemaにより既存の「設定」カテゴリ配下へ自動的に分類するため
+# (obconf.desktop・tint2conf.desktop等と同じ扱い)、append.csvでは実現できない
+# 「トップ階層ではなく既存カテゴリ配下への配置」がこの方式で実現できる。
+# 2026-09-12: 実機確認で「トップ階層への直接表示」が意図しない配置と判明し、
+# append.csv方式からこの.desktop方式へ変更した。
 
 永続領域を作成,mypocketos-persistence-setup
-タッチパッド設定,mypocketos-touchpad-settings,preferences-desktop-touchpad
 Openbox再設定,openbox --reconfigure
 
 ^sep()
