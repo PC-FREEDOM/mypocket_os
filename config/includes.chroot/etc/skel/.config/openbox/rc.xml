@@ -308,13 +308,20 @@
   </keybind>
 
   <!-- MyPocketOS: ウィンドウスナップ (Super+矢印)。Openbox標準action
-       (Unmaximize/MoveResizeTo/ToggleMaximize) のみを使用し、追加
-       スクリプト・daemonは導入しない。左右スナップは、既に最大化状態の
+       (Unmaximize/MoveResizeTo) のみを使用し、追加スクリプト・daemonは
+       導入しない。4方向とも、押した方向の画面半分へスナップする一貫した
+       操作体系とする (最大化・トグル動作・4分割スナップは初回公開版では
+       採用しない。最大化はタイトルバーのダブルクリック・最大化ボタン等、
+       既存の通常操作を利用する)。いずれの方向も、既に最大化状態の
        ウィンドウからでも確実に半分サイズへ移行できるよう、先に
        Unmaximizeしてから MoveResizeTo する (最大化状態のままでは
-       MoveResizeToによる目的のサイズ変更が行われないため)。Super+Upも
-       同様にUnmaximize後にToggleMaximizeすることで、通常状態・最大化
-       状態のどちらから押しても最終結果を必ず最大化にする。 -->
+       MoveResizeToによる目的のサイズ変更が行われないため)。
+
+       MoveResizeToのx/yは、値の先頭が'-'かどうかだけで基準辺が決まる
+       (Openbox 3.6.1 config_parse_gravity_coord()の仕様。後続の数値が
+       0でも無関係)。'-0'は「右端/下端から0px」、すなわち右端/下端に
+       密着させる正式な記法であり、'0'(左端/上端から0px)と対になる表記
+       である。 -->
   <keybind key="W-Left">
     <action name="Unmaximize"/>
     <action name="MoveResizeTo">
@@ -335,10 +342,21 @@
   </keybind>
   <keybind key="W-Up">
     <action name="Unmaximize"/>
-    <action name="ToggleMaximize"/>
+    <action name="MoveResizeTo">
+      <x>0</x>
+      <y>0</y>
+      <width>100%</width>
+      <height>50%</height>
+    </action>
   </keybind>
   <keybind key="W-Down">
     <action name="Unmaximize"/>
+    <action name="MoveResizeTo">
+      <x>0</x>
+      <y>-0</y>
+      <width>100%</width>
+      <height>50%</height>
+    </action>
   </keybind>
 
   <!-- Keybindings for running applications -->

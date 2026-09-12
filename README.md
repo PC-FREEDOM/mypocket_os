@@ -334,7 +334,9 @@ HiDPI等を除いた派生サブセットです。** MyPocketOS独自のアイ�
   参照)。
 - **Window Snapショートカット表示**: 既存ショートカット5項目の後に
   区切り線・見出し付きで、`Super+Left`(左半分)・`Super+Right`(右半分)・
-  `Super+Up`(最大化)・`Super+Down`(最大化解除)を追加した。
+  `Super+Up`(上半分)・`Super+Down`(下半分)を追加した(2026-09-12、PR #46
+  でSuper+Up/Downを最大化/最大化解除から4方向半分スナップへ統一。詳細は
+  仕様書5.4節「Window Snap仕様」参照)。
 
 表示レイアウトは、ウィンドウ全体を`minimum_width`/`maximum_width`とも
 `262`(px)の固定幅とし、値の桁数変化でウィンドウが伸縮しないようにして

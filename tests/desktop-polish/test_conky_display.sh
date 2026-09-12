@@ -528,8 +528,8 @@ check "window snap: heading ウィンドウスナップ is present" \
 for line in \
 	'Super+Left   左半分' \
 	'Super+Right  右半分' \
-	'Super+Up     最大化' \
-	'Super+Down   最大化解除'
+	'Super+Up     上半分' \
+	'Super+Down   下半分'
 do
 	check "window snap line is present and unchanged: ${line}" \
 		sh -c 'printf "%s" "$1" | grep -qF "$2"' _ "${TEXT_BLOCK}" "${line}"
