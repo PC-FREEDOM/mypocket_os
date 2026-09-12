@@ -27,6 +27,7 @@ tests/desktop-polish/test_battery.sh
 tests/desktop-polish/test_touchpad.sh
 tests/desktop-polish/test_conky_display.sh
 tests/desktop-polish/test_conky_network_restart.sh
+tests/desktop-polish/test_touchpad_settings.sh
 ```
 
 ## 内容
@@ -118,6 +119,35 @@ tests/desktop-polish/test_conky_network_restart.sh
   存在しない場合は何もしないこと、(4) DISPLAYを取得できない場合は
   fail-closeで再起動を試みず、既存プロセスにも触れないこと。実root権限・
   実conky・実NetworkManagerは一切使用しない。
+- `test_touchpad_settings.sh`: MyPocketOS専用タッチパッド設定GUI
+  (`config/includes.chroot/usr/local/bin/mypocketos-touchpad-settings`、
+  2026-09-12、`reports/ai-review/20260912-touchpad-settings-gui-design.md`
+  設計)を確認する。`eval`を使用していないこと、ユーザー設定ファイル
+  (`~/.config/mypocketos/touchpad.conf`)を`.`/`source`していないこと、
+  特定のタッチパッドvendor/モデル名(ELAN等)をハードコードしていない
+  こと、`libinput Tapping Enabled`プロパティの有無のみでタッチパッドを
+  判定していること、`51-mypocketos-touchpad.conf`(Xorg起動時の既定値)
+  へは一切書き込まないこと、`libinput Scroll Method Enabled`書き込み時に
+  edge/buttonを常に0に固定していること、`libinput Scroll Methods
+  Available`の実機確認済み書式(`"1, 1, 0"`)を`sed`+`cut -d','`+
+  `tr -d '[:space:]'`で安全にパースしていること、「既定値に戻す」が
+  設定ファイルを上書きではなく削除する方式であること、Openbox
+  autostartからの`--apply`呼び出しが固定sleepではなく有界retry
+  (最大5回・0.3秒間隔)であることを静的に確認したうえで、モック
+  `xinput`/`yad`(`mktemp -d`のMOCKDIRへ配置し`PATH`で差し替える、
+  `test_conky_network_restart.sh`と同じ手法)と実プロセス・実`$HOME`
+  差し替えを使って、次を機能的に検証する: 設定ファイル無し/正常値/
+  不正値(キー単位フォールバック)、`xinput`未導入、タッチパッド未検出、
+  USBマウスのみ(set-propが一切呼ばれないこと)、タッチパッド1台/複数台
+  への適用、タップ・2本指スクロール・スクロール方向・ポインタ速度5段階
+  それぞれのON/OFF・XInput値、yad `--form`のApply/Cancel/Default reset
+  (終了コード0/1/10)、`--apply`モードでのyad非起動での再適用、
+  `$HOME`配下への設定ファイル作成(Persistence相性確認)、複数タッチ
+  パッドへの適用が一部失敗した場合のGUI警告表示(`--apply`は無言)、
+  複数タッチパッド時の2本指スクロール対応AND判定(1台でも非対応なら
+  チェックボックス無効化)、yad初期表示値がon/off設定を正しく
+  TRUE/FALSE・選択済みラベルへ変換していること。実root権限・実X11・
+  実xinput・実yadは一切使用しない。
 
 ### ネットワーク表示の実装経緯 (2026-09-06〜2026-09-07)
 
