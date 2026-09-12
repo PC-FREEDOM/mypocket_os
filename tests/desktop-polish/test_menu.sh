@@ -174,8 +174,10 @@ check "jgmenu_run apps output was piped into jgmenu's stdin unchanged" \
 
 #==========================
 # ウィンドウスナップ (Super+矢印)。追加スクリプト・daemonは使わず、
-# Openbox標準action (Unmaximize/MoveResizeTo/ToggleMaximize) のみで
+# Openbox標準action (Unmaximize/MoveResizeTo) のみで、4方向とも
+# 「その方向の画面半分へスナップ」する一貫した操作体系として
 # 実装されていることを、<keyboard>直下のkeybind構造から確認する。
+# 最大化・トグル動作・4分割スナップは初回公開版では採用しない。
 #==========================
 check "keyboard has exactly one W-Left keybind" \
 	python3 -c "
@@ -257,7 +259,7 @@ assert val('width') == '50%', val('width')
 assert val('height') == '100%', val('height')
 "
 
-check "W-Up actions are, in order, Unmaximize then ToggleMaximize" \
+check "W-Up actions are, in order, Unmaximize then MoveResizeTo(x=0,y=0,width=100%,height=50%)" \
 	python3 -c "
 import xml.etree.ElementTree as ET
 ns = {'ob': 'http://openbox.org/3.4/rc'}
@@ -265,10 +267,19 @@ root = ET.parse('${RC_XML}').getroot()
 kb = root.find('.//ob:keyboard', ns)
 kbd = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Up'][0]
 actions = kbd.findall('ob:action', ns)
-assert [a.get('name') for a in actions] == ['Unmaximize', 'ToggleMaximize'], [a.get('name') for a in actions]
+assert [a.get('name') for a in actions] == ['Unmaximize', 'MoveResizeTo'], [a.get('name') for a in actions]
+mrt = actions[1]
+def val(tag):
+    e = mrt.find(f'ob:{tag}', ns)
+    assert e is not None, f'missing {tag}'
+    return e.text.strip()
+assert val('x') == '0', val('x')
+assert val('y') == '0', val('y')
+assert val('width') == '100%', val('width')
+assert val('height') == '50%', val('height')
 "
 
-check "W-Down actions are exactly Unmaximize (only, no other action)" \
+check "W-Down actions are, in order, Unmaximize then MoveResizeTo(x=0,y=-0,width=100%,height=50%)" \
 	python3 -c "
 import xml.etree.ElementTree as ET
 ns = {'ob': 'http://openbox.org/3.4/rc'}
@@ -276,7 +287,16 @@ root = ET.parse('${RC_XML}').getroot()
 kb = root.find('.//ob:keyboard', ns)
 kbd = [k for k in kb.findall('ob:keybind', ns) if k.get('key') == 'W-Down'][0]
 actions = kbd.findall('ob:action', ns)
-assert [a.get('name') for a in actions] == ['Unmaximize'], [a.get('name') for a in actions]
+assert [a.get('name') for a in actions] == ['Unmaximize', 'MoveResizeTo'], [a.get('name') for a in actions]
+mrt = actions[1]
+def val(tag):
+    e = mrt.find(f'ob:{tag}', ns)
+    assert e is not None, f'missing {tag}'
+    return e.text.strip()
+assert val('x') == '0', val('x')
+assert val('y') == '-0', val('y')
+assert val('width') == '100%', val('width')
+assert val('height') == '50%', val('height')
 "
 
 check "existing W-S-Left/Right/Up/Down DirectionalCycleWindows bindings are unchanged" \
