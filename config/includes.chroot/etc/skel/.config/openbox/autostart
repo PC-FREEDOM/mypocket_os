@@ -45,3 +45,11 @@ write_boot_mode_state
 # -p: 起動直後の競合を避けるため数秒待ってから開始 (man conky(1) -p/--pause)
 # -U: 既にconkyが起動していれば多重起動しない (man conky(1) -U/--unique)
 conky -p 3 -U &
+
+# タッチパッド設定GUI (mypocketos-touchpad-settings) で保存したユーザー
+# 設定 (${HOME}/.config/mypocketos/touchpad.conf) を、ログインのたびに
+# XInputプロパティへ再適用する。設定ファイルが無ければMyPocketOS既定値を
+# 再適用する (51-mypocketos-touchpad.confは変更しない、あくまで上乗せの
+# ランタイム上書き)。デバイス検出が見つかるまでの短い有界retryは
+# スクリプト内部で行うため、ここでは固定sleepを挟まない。
+mypocketos-touchpad-settings --apply &

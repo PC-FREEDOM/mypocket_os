@@ -1,0 +1,417 @@
+#!/bin/sh
+#
+# mypocketos-touchpad-settings - MyPocketOS タッチパッド設定GUI
+#
+# 引数:
+#   (なし)   - yad GUIを表示し、ユーザーがタッチパッド設定を変更できるようにする
+#   --apply  - GUIを表示せず、保存済み設定(無ければMyPocketOS既定値)を
+#              検出済みの全タッチパッドへ無言で再適用する
+#              (Openbox autostartからのログイン時再適用専用)
+#
+# 設計方針 (reports/ai-review/20260912-touchpad-settings-gui-design.md 準拠):
+# - POSIX sh (dash) で動作する。eval は使用しない。sudo は使用しない。
+# - `/etc/X11/xorg.conf.d/51-mypocketos-touchpad.conf` (Xorg起動時の既定値)
+#   は一切書き換えない。本スクリプトはログイン中のセッションでXInput
+#   プロパティ (libinput ドライバの実行時プロパティ) を上書きするだけの
+#   追加の層として動作する。
+# - タッチパッド判定は `libinput Tapping Enabled` プロパティの有無のみで
+#   行う (デバイス名・vendor ID等のハードコード一切なし)。tapping は
+#   libinputでタッチパッドに分類されたデバイスにしか存在しないプロパティ
+#   であり、USBマウス・トラックポイントには存在しないため、これらへ
+#   set-propが行われることは構造的に無い。
+# - ユーザー設定ファイル (${HOME}/.config/mypocketos/touchpad.conf) は
+#   `.`/`source` しない (事実上のeval・任意コード実行になるため)。読み込みは
+#   grep/cutによる行単位の安全なパースのみで行い、不正な値はキー単位で
+#   MyPocketOS既定値へフォールバックする。
+# - 書き込みは mktemp (同一ディレクトリ) + mv によるatomic置換で行う。
+# - 「既定値に戻す」は設定ファイルを削除する方式とする。「設定ファイルが
+#   存在しない」ことを「MyPocketOSのシステム既定値を使う」という正式な
+#   意味として扱うことで、将来51-mypocketos-touchpad.conf側の既定値が
+#   変更された場合にも自然に追従できるようにしている。
+# - `libinput Scroll Method Enabled` は3値(two-finger, edge, button の順、
+#   man 4 libinputで確認済み)を常に同時に書き込む。edge/buttonは常に0に
+#   固定し、意図しないスクロール方式が有効化されることを防ぐ。
+# - `libinput Scroll Methods Available` の実際の出力書式 (実機Debian 13で
+#   確認済み: 例 "1, 1, 0"、カンマ+半角スペース区切り) に基づき、
+#   two_finger_available() は "):" 以降を取り出してから
+#   `cut -d',' -f1` + `tr -d '[:space:]'` で先頭(two-finger)の値のみを
+#   安全に取り出す。複数タッチパッドが検出された場合、全デバイスが
+#   two-fingerに対応している場合のみ「2本指でスクロールする」を
+#   操作可能にする(AND条件、1台でも非対応なら無効化)。
+# - 複数タッチパッドには常に同じ設定を適用する。1台への適用が失敗しても
+#   他デバイスへの適用は継続する。GUIモードでのみ、1台でも失敗があれば
+#   日本語の警告を表示する。--applyモードは常に無言(ユーザー操作を伴わない
+#   バックグラウンド処理のため)。
+# - Openbox autostartからの起動時(--apply)は、Xorg起動直後のデバイス
+#   初期化の遅延に備え、無意味な固定sleepではなく「見つかるまで最大5回・
+#   0.3秒間隔」の有界retryを行う。通常はデバイスが即座に見つかるため、
+#   待機時間はほぼ発生しない。
+# - 2026-09-12 実機フィードバック: ポインタ速度・スクロール方向は実際に
+#   動かして試しながら調整することが多いため、「適用」を押すたびにGUIが
+#   閉じる挙動は使いにくいと判明した。そのため run_gui() はダイアログ
+#   表示をループ化し、「適用」(保存+反映してGUI継続)と「OK」(保存+反映
+#   してGUI終了)を明確に分離した。ウィンドウを閉じる/Escapeした場合は、
+#   その時点で未適用の変更を保存・反映しない(既に「適用」済みの内容は
+#   そのまま維持される)。「既定値に戻す」もGUIを終了せず、表示内容を
+#   既定値へ更新したうえでループを継続する。
+#
+set -u
+
+PROG_NAME='mypocketos-touchpad-settings'
+CONF_DIR="${HOME}/.config/mypocketos"
+CONF_FILE="${CONF_DIR}/touchpad.conf"
+
+usage() {
+    printf 'usage: %s [--apply]\n' "$PROG_NAME" >&2
+    exit 2
+}
+
+# ---- xinput / デバイス検出 ----------------------------------------------
+have_xinput() {
+    command -v xinput >/dev/null 2>&1
+}
+
+# libinput Tapping Enabled プロパティを持つデバイスだけをタッチパッドと
+# みなす。マスターポインタ・キーボード・XTESTデバイス・USBマウス等には
+# このプロパティ自体が存在しないため、自然に除外される。
+detect_touchpad_ids() {
+    for id in $(xinput list --id-only 2>/dev/null); do
+        xinput list-props "$id" 2>/dev/null | grep -q "libinput Tapping Enabled (" && printf '%s\n' "$id"
+    done
+}
+
+# --apply専用: Xorg起動直後のデバイス初期化レースに備えた有界retry。
+# 1回目で見つかれば待機なしで即座に返す(通常ケースを遅延させない)。
+detect_touchpad_ids_with_retry() {
+    i=0
+    while [ "$i" -lt 5 ]; do
+        ids="$(detect_touchpad_ids)"
+        if [ -n "$ids" ]; then
+            printf '%s\n' "$ids"
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 0.3
+    done
+    return 1
+}
+
+# libinput Scroll Methods Available (例: "1, 1, 0", two-finger,edge,button
+# の順、実機Debian 13で確認済み)の先頭(two-finger)が1かどうかを判定する。
+two_finger_available() {
+    line="$(xinput list-props "$1" 2>/dev/null | grep "libinput Scroll Methods Available (")"
+    value="$(printf '%s' "$line" | sed -n 's/^.*):[[:space:]]*//p' | cut -d',' -f1 | tr -d '[:space:]')"
+    [ "$value" = "1" ]
+}
+
+# 与えられた全IDについてtwo-finger対応かを判定する(AND条件)。
+# 1台でも非対応があれば全体として「非対応」を返す。
+two_finger_supported_on_all() {
+    for id in "$@"; do
+        two_finger_available "$id" || return 1
+    done
+    return 0
+}
+
+# ---- 設定ファイルの読み書き (eval/source禁止) -----------------------------
+conf_get() {
+    key="$1"
+    default="$2"
+    value=""
+    if [ -r "$CONF_FILE" ]; then
+        value="$(grep -E "^${key}=" "$CONF_FILE" 2>/dev/null | tail -n1 | cut -d= -f2-)"
+    fi
+    if [ -n "$value" ]; then
+        printf '%s\n' "$value"
+    else
+        printf '%s\n' "$default"
+    fi
+}
+
+validate_on_off() {
+    case "$1" in
+    on | off) printf '%s\n' "$1" ;;
+    *) printf '%s\n' "$2" ;;
+    esac
+}
+
+validate_pointer_speed() {
+    case "$1" in
+    -2 | -1 | 0 | 1 | 2) printf '%s\n' "$1" ;;
+    *) printf '%s\n' "0" ;;
+    esac
+}
+
+# MyPocketOS既定値(51-mypocketos-touchpad.confと一致する値)を
+# TAPPING/TWO_FINGER_SCROLL/NATURAL_SCROLLING/POINTER_SPEEDへ設定する。
+load_defaults() {
+    TAPPING=on
+    TWO_FINGER_SCROLL=on
+    NATURAL_SCROLLING=on
+    POINTER_SPEED=0
+}
+
+# 設定ファイルを読み込み、不正値は個別キー単位で既定値へフォールバックする。
+# 設定ファイルが存在しない場合もMyPocketOS既定値を返す(7節: GUI起動時の
+# 表示値の設計どおり)。未知のキーは conf_get が明示的な4キーしか
+# 読まないことで自然に無視される。
+load_settings() {
+    load_defaults
+    TAPPING="$(validate_on_off "$(conf_get TAPPING "$TAPPING")" "$TAPPING")"
+    TWO_FINGER_SCROLL="$(validate_on_off "$(conf_get TWO_FINGER_SCROLL "$TWO_FINGER_SCROLL")" "$TWO_FINGER_SCROLL")"
+    NATURAL_SCROLLING="$(validate_on_off "$(conf_get NATURAL_SCROLLING "$NATURAL_SCROLLING")" "$NATURAL_SCROLLING")"
+    POINTER_SPEED="$(validate_pointer_speed "$(conf_get POINTER_SPEED "$POINTER_SPEED")")"
+}
+
+conf_write() {
+    mkdir -p "$CONF_DIR" 2>/dev/null || return 1
+    tmp_file="$(mktemp "${CONF_DIR}/touchpad.conf.XXXXXX" 2>/dev/null)" || return 1
+    {
+        printf 'TAPPING=%s\n' "$1"
+        printf 'TWO_FINGER_SCROLL=%s\n' "$2"
+        printf 'NATURAL_SCROLLING=%s\n' "$3"
+        printf 'POINTER_SPEED=%s\n' "$4"
+    } >"$tmp_file" 2>/dev/null || {
+        rm -f "$tmp_file"
+        return 1
+    }
+    mv -f "$tmp_file" "$CONF_FILE" 2>/dev/null || {
+        rm -f "$tmp_file"
+        return 1
+    }
+}
+
+# 「既定値に戻す」: 設定ファイルを削除する(上書きしない)。
+# 「ファイルが存在しない」=「MyPocketOSのシステム既定値を使う」という
+# 正式な意味を持たせることで、将来51-mypocketos-touchpad.confの既定値が
+# 変更されても自然に追従できるようにする。
+conf_reset() {
+    rm -f "$CONF_FILE" 2>/dev/null
+}
+
+# ---- 設定値 <-> XInput値/表示ラベルの対応 ---------------------------------
+pointer_speed_to_accel() {
+    case "$1" in
+    -2) printf '%s\n' "-0.8" ;;
+    -1) printf '%s\n' "-0.4" ;;
+    1) printf '%s\n' "0.4" ;;
+    2) printf '%s\n' "0.8" ;;
+    *) printf '%s\n' "0.0" ;;
+    esac
+}
+
+pointer_speed_to_label() {
+    case "$1" in
+    -2) printf '%s\n' "遅い" ;;
+    -1) printf '%s\n' "やや遅い" ;;
+    1) printf '%s\n' "やや速い" ;;
+    2) printf '%s\n' "速い" ;;
+    *) printf '%s\n' "標準" ;;
+    esac
+}
+
+pointer_label_to_speed() {
+    case "$1" in
+    遅い) printf '%s\n' "-2" ;;
+    やや遅い) printf '%s\n' "-1" ;;
+    やや速い) printf '%s\n' "1" ;;
+    速い) printf '%s\n' "2" ;;
+    *) printf '%s\n' "0" ;;
+    esac
+}
+
+# ---- XInputへの反映 -------------------------------------------------------
+# $@ = タッチパッドID一覧。グローバル変数 TAPPING/TWO_FINGER_SCROLL/
+# NATURAL_SCROLLING/POINTER_SPEED を読み、各IDへ4プロパティを書き込む。
+# 1台への書き込みが失敗しても他デバイスへの適用は継続する。
+# 戻り値: 1台でも失敗があれば1、すべて成功すれば0。
+apply_settings() {
+    failed=0
+
+    tap_val=0
+    [ "$TAPPING" = "on" ] && tap_val=1
+
+    nat_val=0
+    [ "$NATURAL_SCROLLING" = "on" ] && nat_val=1
+
+    two_val=0
+    [ "$TWO_FINGER_SCROLL" = "on" ] && two_val=1
+
+    accel="$(pointer_speed_to_accel "$POINTER_SPEED")"
+
+    for id in "$@"; do
+        xinput set-prop "$id" "libinput Tapping Enabled" "$tap_val" 2>/dev/null || failed=1
+        xinput set-prop "$id" "libinput Natural Scrolling Enabled" "$nat_val" 2>/dev/null || failed=1
+        # edge/buttonは常に0に固定する (design 5.1節)
+        xinput set-prop "$id" "libinput Scroll Method Enabled" "$two_val" 0 0 2>/dev/null || failed=1
+        xinput set-prop "$id" "libinput Accel Speed" "$accel" 2>/dev/null || failed=1
+    done
+
+    return "$failed"
+}
+
+# ---- ダイアログ -----------------------------------------------------------
+notice() {
+    yad --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+        --width=380 --text="$1" \
+        --button="閉じる:0" >/dev/null 2>&1
+}
+
+# ---- GUIモード -------------------------------------------------------------
+run_gui() {
+    if ! have_xinput; then
+        notice 'この環境ではタッチパッド設定機能を利用できません。'
+        exit 0
+    fi
+
+    ids="$(detect_touchpad_ids)"
+    if [ -z "$ids" ]; then
+        notice 'タッチパッドが見つかりません。'
+        exit 0
+    fi
+
+    device_count=0
+    for id in $ids; do
+        device_count=$((device_count + 1))
+    done
+
+    two_finger_ok=1
+    two_finger_supported_on_all $ids || two_finger_ok=0
+
+    two_finger_note=""
+    if [ "$two_finger_ok" -eq 0 ]; then
+        if [ "$device_count" -eq 1 ]; then
+            two_finger_note='このタッチパッドは2本指スクロールに対応していません'
+        else
+            two_finger_note='接続されているタッチパッドの一部が2本指スクロールに対応していません'
+        fi
+    fi
+
+    dialog_text='タッチパッドの設定を変更します。'
+    if [ -n "$two_finger_note" ]; then
+        dialog_text="$(printf '%s\n%s' "$dialog_text" "$two_finger_note")"
+    fi
+
+    load_settings
+
+    # 「適用」(保存+反映してGUI継続)と「OK」(保存+反映してGUI終了)を
+    # 分離するため、確定するまでダイアログを再表示し続ける。ウィンドウを
+    # 閉じる/Escapeした場合(rc が 0/10/20 以外)は保存・反映せずループを
+    # 抜ける。「既定値に戻す」も表示内容を既定値に更新したうえでループを
+    # 継続する(GUIは閉じない)。
+    while :; do
+        tapping_yad="FALSE"
+        [ "$TAPPING" = "on" ] && tapping_yad="TRUE"
+
+        if [ "$two_finger_ok" -eq 1 ]; then
+            two_finger_yad="FALSE"
+            [ "$TWO_FINGER_SCROLL" = "on" ] && two_finger_yad="TRUE"
+        else
+            two_finger_yad="@disabled@"
+        fi
+
+        # 2026-09-12 実機フィードバック: 「自然」「従来どおり」は初心者に
+        # 意味が伝わりにくいため、指の動きとの関係で表現する文言へ変更した
+        # (設定ファイルのon/off・内部のNatural Scrolling Enabled値は不変)。
+        if [ "$NATURAL_SCROLLING" = "on" ]; then
+            scroll_dir_field="^指の動きと同じ方向!指の動きと反対方向"
+        else
+            scroll_dir_field="指の動きと同じ方向!^指の動きと反対方向"
+        fi
+
+        case "$(pointer_speed_to_label "$POINTER_SPEED")" in
+        遅い) speed_field="^遅い!やや遅い!標準!やや速い!速い" ;;
+        やや遅い) speed_field="遅い!^やや遅い!標準!やや速い!速い" ;;
+        やや速い) speed_field="遅い!やや遅い!標準!^やや速い!速い" ;;
+        速い) speed_field="遅い!やや遅い!標準!やや速い!^速い" ;;
+        *) speed_field="遅い!やや遅い!^標準!やや速い!速い" ;;
+        esac
+
+        result="$(yad --form --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+            --text="$dialog_text" \
+            --field="タップでクリックする:CHK" "$tapping_yad" \
+            --field="2本指でスクロールする:CHK" "$two_finger_yad" \
+            --field="スクロール方向:CB" "$scroll_dir_field" \
+            --field="ポインタの速さ:CB" "$speed_field" \
+            --button="既定値に戻す:10" \
+            --button="適用:20" \
+            --button="OK:0")"
+        rc=$?
+
+        case "$rc" in
+        0 | 20)
+            new_tapping="$(printf '%s' "$result" | cut -d'|' -f1)"
+            new_two_finger="$(printf '%s' "$result" | cut -d'|' -f2)"
+            new_scroll_dir="$(printf '%s' "$result" | cut -d'|' -f3)"
+            new_speed_label="$(printf '%s' "$result" | cut -d'|' -f4)"
+
+            TAPPING="off"
+            [ "$new_tapping" = "TRUE" ] && TAPPING="on"
+
+            TWO_FINGER_SCROLL="off"
+            [ "$new_two_finger" = "TRUE" ] && TWO_FINGER_SCROLL="on"
+
+            NATURAL_SCROLLING="off"
+            [ "$new_scroll_dir" = "指の動きと同じ方向" ] && NATURAL_SCROLLING="on"
+
+            POINTER_SPEED="$(pointer_label_to_speed "$new_speed_label")"
+
+            # yadの出力は上記の固定選択肢のいずれかのはずだが、念のため
+            # 最終防衛としてもう一度検証を通す。
+            TAPPING="$(validate_on_off "$TAPPING" on)"
+            TWO_FINGER_SCROLL="$(validate_on_off "$TWO_FINGER_SCROLL" on)"
+            NATURAL_SCROLLING="$(validate_on_off "$NATURAL_SCROLLING" on)"
+            POINTER_SPEED="$(validate_pointer_speed "$POINTER_SPEED")"
+
+            if conf_write "$TAPPING" "$TWO_FINGER_SCROLL" "$NATURAL_SCROLLING" "$POINTER_SPEED"; then
+                if ! apply_settings $ids; then
+                    notice '一部のタッチパッドに設定を適用できませんでした。'
+                fi
+            else
+                notice '設定を保存できませんでした。'
+            fi
+
+            [ "$rc" -eq 0 ] && break
+            ;;
+        10)
+            conf_reset
+            load_defaults
+            if ! apply_settings $ids; then
+                notice '一部のタッチパッドに設定を適用できませんでした。'
+            fi
+            ;;
+        *)
+            # ウィンドウを閉じる(X)・Escape(252)・timeout(70)等はすべて
+            # 「何もしない」。この時点で未適用の変更は保存・反映しない
+            # (既に「適用」済みの設定はそのまま維持される)。
+            break
+            ;;
+        esac
+    done
+}
+
+# ---- --applyモード (Openbox autostart専用、常に無言) -----------------------
+run_apply() {
+    have_xinput || exit 0
+
+    ids="$(detect_touchpad_ids_with_retry)" || exit 0
+    [ -n "$ids" ] || exit 0
+
+    load_settings
+    apply_settings $ids
+    exit 0
+}
+
+# ---- 引数解析 (case文で限定) ------------------------------------------------
+if [ $# -eq 0 ]; then
+    ACTION='gui'
+elif [ $# -eq 1 ] && [ "$1" = '--apply' ]; then
+    ACTION='apply'
+else
+    usage
+fi
+
+case "$ACTION" in
+gui) run_gui ;;
+apply) run_apply ;;
+esac

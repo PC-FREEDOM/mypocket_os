@@ -19,6 +19,9 @@ xserver-xorg-input-all
 xinit
 dbus-x11
 
+# ---- タッチパッド設定GUI用 (XInputプロパティの読み書き) ----
+xinput
+
 # ---- デスクトップ環境: Openbox ----
 openbox
 tint2
