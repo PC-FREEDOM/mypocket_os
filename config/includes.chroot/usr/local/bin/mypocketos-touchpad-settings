@@ -288,10 +288,13 @@ run_gui() {
         fi
     fi
 
+    # 2026-09-12 実機フィードバック: 「自然」「従来どおり」は初心者に意味が
+    # 伝わりにくいため、指の動きとの関係で表現する文言へ変更した
+    # (設定ファイルのon/off・内部のNatural Scrolling Enabled値は不変)。
     if [ "$NATURAL_SCROLLING" = "on" ]; then
-        scroll_dir_field="^自然!従来どおり"
+        scroll_dir_field="^指の動きと同じ方向!指の動きと反対方向"
     else
-        scroll_dir_field="自然!^従来どおり"
+        scroll_dir_field="指の動きと同じ方向!^指の動きと反対方向"
     fi
 
     case "$(pointer_speed_to_label "$POINTER_SPEED")" in
@@ -332,7 +335,7 @@ run_gui() {
         [ "$new_two_finger" = "TRUE" ] && TWO_FINGER_SCROLL="on"
 
         NATURAL_SCROLLING="off"
-        [ "$new_scroll_dir" = "自然" ] && NATURAL_SCROLLING="on"
+        [ "$new_scroll_dir" = "指の動きと同じ方向" ] && NATURAL_SCROLLING="on"
 
         POINTER_SPEED="$(pointer_label_to_speed "$new_speed_label")"
 

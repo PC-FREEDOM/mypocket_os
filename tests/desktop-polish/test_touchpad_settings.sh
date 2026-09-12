@@ -18,6 +18,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="${REPO_ROOT}/config/includes.chroot/usr/local/bin/mypocketos-touchpad-settings"
 AUTOSTART="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/openbox/autostart"
 COMMON_LIST="${REPO_ROOT}/config/package-lists.d/mypocketos-common.list.chroot"
+APPEND_CSV="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/jgmenu/append.csv"
+ICON_ARCHIVE="${REPO_ROOT}/config/includes.chroot/usr/share/mypocketos/icon-themes/MyPocketOS-Fluent-yellow.tar.gz"
 
 PASS=0
 FAIL=0
@@ -73,6 +75,22 @@ check "autostart invokes mypocketos-touchpad-settings --apply" \
 	grep -qF 'mypocketos-touchpad-settings --apply &' "${AUTOSTART}"
 check "autostart syntax is valid (sh -n)" sh -n "${AUTOSTART}"
 check "autostart syntax is valid (dash -n)" dash -n "${AUTOSTART}"
+
+# ---- アプリメニュー登録 (append.csv、jgmenu csv_cmd=apps が末尾に付加する) ----
+check "append.csv registers a 'タッチパッド設定' entry" \
+	grep -q 'タッチパッド設定' "${APPEND_CSV}"
+check "append.csv entry launches mypocketos-touchpad-settings with no arguments (GUI mode)" \
+	grep -qE '^タッチパッド設定,mypocketos-touchpad-settings(,|$)' "${APPEND_CSV}"
+check "append.csv entry specifies the preferences-desktop-touchpad icon (jgmenu Fields (3) icon)" \
+	grep -qF 'タッチパッド設定,mypocketos-touchpad-settings,preferences-desktop-touchpad' "${APPEND_CSV}"
+check "the referenced icon actually exists in the committed MyPocketOS-Fluent-yellow icon theme archive (no new image asset added)" \
+	sh -c 'tar tzf "$1" 2>/dev/null | grep -q "scalable/apps/preferences-desktop-touchpad.svg$"' _ "${ICON_ARCHIVE}"
+check "existing append.csv entries (永続領域を作成 etc.) are still intact" \
+	grep -q '永続領域を作成' "${APPEND_CSV}"
+check "no new .desktop file was introduced (menu registration uses append.csv only, per existing convention)" \
+	sh -c '[ "$(find "$1" -iname "*.desktop" 2>/dev/null | wc -l)" -eq 0 ]' _ "${REPO_ROOT}/config/includes.chroot"
+check "jgmenurc still uses csv_cmd=apps (append.csv is auto-appended, no menu-generation config change needed)" \
+	grep -qE '^csv_cmd[[:space:]]*=[[:space:]]*apps' "${REPO_ROOT}/config/includes.chroot/etc/skel/.config/jgmenu/jgmenurc"
 
 #==========================
 # 機能テスト: モックxinput/yad + 実プロセス
@@ -406,14 +424,14 @@ mkdir -p "$(dirname "${CONF_PATH}")"
 	printf 'NATURAL_SCROLLING=on\n'
 	printf 'POINTER_SPEED=0\n'
 } >"${CONF_PATH}"
-printf 'FALSE|TRUE|従来どおり|速い|\n' >"${MOCKDIR}/yad_stdout"
+printf 'FALSE|TRUE|指の動きと反対方向|速い|\n' >"${MOCKDIR}/yad_stdout"
 printf '0\n' >"${MOCKDIR}/yad_exit"
 run_gui
 check "13: Apply writes the new TAPPING=off to the config file" \
 	grep -qx 'TAPPING=off' "${CONF_PATH}"
 check "13: Apply writes the new TWO_FINGER_SCROLL=on to the config file" \
 	grep -qx 'TWO_FINGER_SCROLL=on' "${CONF_PATH}"
-check "13: Apply writes the new NATURAL_SCROLLING=off (従来どおり) to the config file" \
+check "13: Apply writes the new NATURAL_SCROLLING=off (指の動きと反対方向) to the config file" \
 	grep -qx 'NATURAL_SCROLLING=off' "${CONF_PATH}"
 check "13: Apply writes the new POINTER_SPEED=2 (速い) to the config file" \
 	grep -qx 'POINTER_SPEED=2' "${CONF_PATH}"
@@ -424,8 +442,8 @@ check "13: Apply immediately reflects Pointer speed=速い via set-prop" \
 check "22: initial CHK field passed to yad reflects the current on/on/on/0 config as TRUE/TRUE" \
 	sh -c 'grep -qF "タップでクリックする:CHK TRUE" "$1" && grep -qF "2本指でスクロールする:CHK TRUE" "$1"' \
 	_ "${MOCKDIR}/yad_calls.txt"
-check "22: initial CB field marks 自然/標準 as the default (^) selection for on/0 config" \
-	sh -c 'grep -qF "スクロール方向:CB ^自然!従来どおり" "$1" && grep -qF "ポインタの速さ:CB 遅い!やや遅い!^標準!やや速い!速い" "$1"' \
+check "22: initial CB field marks 指の動きと同じ方向/標準 as the default (^) selection for on/0 config" \
+	sh -c 'grep -qF "スクロール方向:CB ^指の動きと同じ方向!指の動きと反対方向" "$1" && grep -qF "ポインタの速さ:CB 遅い!やや遅い!^標準!やや速い!速い" "$1"' \
 	_ "${MOCKDIR}/yad_calls.txt"
 
 # ---- 14: Cancel (yadが終了コード1を返す) → 何も変わらない ----
@@ -434,7 +452,7 @@ printf '10\n' >"${MOCKDIR}/ids.txt"
 write_touchpad_props 10
 mkdir -p "$(dirname "${CONF_PATH}")"
 printf 'TAPPING=on\n' >"${CONF_PATH}"
-printf 'FALSE|FALSE|従来どおり|遅い|\n' >"${MOCKDIR}/yad_stdout"
+printf 'FALSE|FALSE|指の動きと反対方向|遅い|\n' >"${MOCKDIR}/yad_stdout"
 printf '1\n' >"${MOCKDIR}/yad_exit"
 run_gui
 check "14: Cancel does not change the config file" \
@@ -482,7 +500,7 @@ check "16: --apply re-applies the saved TAPPING=off setting" \
 reset_mock_state
 printf '10\n' >"${MOCKDIR}/ids.txt"
 write_touchpad_props 10
-printf 'FALSE|TRUE|自然|標準|\n' >"${MOCKDIR}/yad_stdout"
+printf 'FALSE|TRUE|指の動きと同じ方向|標準|\n' >"${MOCKDIR}/yad_stdout"
 printf '0\n' >"${MOCKDIR}/yad_exit"
 run_gui
 check "17: config file is created under the (fake) \$HOME/.config/mypocketos/ path" \
@@ -494,7 +512,7 @@ printf '10\n12\n' >"${MOCKDIR}/ids.txt"
 write_touchpad_props 10
 write_touchpad_props 12
 printf '12\n' >"${MOCKDIR}/fail_ids.txt"
-printf 'TRUE|TRUE|自然|標準|\n' >"${MOCKDIR}/yad_stdout"
+printf 'TRUE|TRUE|指の動きと同じ方向|標準|\n' >"${MOCKDIR}/yad_stdout"
 printf '0\n' >"${MOCKDIR}/yad_exit"
 run_gui
 check "19 (GUI): shows a partial-failure warning when one of several touchpads fails" \

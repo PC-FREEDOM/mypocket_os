@@ -7,8 +7,15 @@
 # 永続領域作成も同様に、特権昇格や特権ヘルパーを直接書かず、確認・検証を
 # まとめた一般ユーザー権限のGUI本体 mypocketos-persistence-setup へ委譲する。
 # (実際に jgmenu-apps で生成し、この内容が末尾に含まれることを確認済み)
+#
+# タッチパッド設定 (2026-09-12追加): mypocketos-touchpad-settings (GUI本体、
+# 一般ユーザー権限のみで完結、rootは不要) を委譲する。アイコンは
+# 追加画像を増やさず、既存のMyPocketOS-Fluent-yellowアイコンテーマに
+# 既に収録されている scalable/apps/preferences-desktop-touchpad.svg を
+# 名前解決 (jgmenu(1) Fields (3) icon) で利用する。
 
 永続領域を作成,mypocketos-persistence-setup
+タッチパッド設定,mypocketos-touchpad-settings,preferences-desktop-touchpad
 Openbox再設定,openbox --reconfigure
 
 ^sep()
