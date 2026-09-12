@@ -46,6 +46,14 @@
 #   初期化の遅延に備え、無意味な固定sleepではなく「見つかるまで最大5回・
 #   0.3秒間隔」の有界retryを行う。通常はデバイスが即座に見つかるため、
 #   待機時間はほぼ発生しない。
+# - 2026-09-12 実機フィードバック: ポインタ速度・スクロール方向は実際に
+#   動かして試しながら調整することが多いため、「適用」を押すたびにGUIが
+#   閉じる挙動は使いにくいと判明した。そのため run_gui() はダイアログ
+#   表示をループ化し、「適用」(保存+反映してGUI継続)と「OK」(保存+反映
+#   してGUI終了)を明確に分離した。ウィンドウを閉じる/Escapeした場合は、
+#   その時点で未適用の変更を保存・反映しない(既に「適用」済みの内容は
+#   そのまま維持される)。「既定値に戻す」もGUIを終了せず、表示内容を
+#   既定値へ更新したうえでループを継続する。
 #
 set -u
 
@@ -270,17 +278,8 @@ run_gui() {
     two_finger_ok=1
     two_finger_supported_on_all $ids || two_finger_ok=0
 
-    load_settings
-
-    tapping_yad="FALSE"
-    [ "$TAPPING" = "on" ] && tapping_yad="TRUE"
-
     two_finger_note=""
-    if [ "$two_finger_ok" -eq 1 ]; then
-        two_finger_yad="FALSE"
-        [ "$TWO_FINGER_SCROLL" = "on" ] && two_finger_yad="TRUE"
-    else
-        two_finger_yad="@disabled@"
+    if [ "$two_finger_ok" -eq 0 ]; then
         if [ "$device_count" -eq 1 ]; then
             two_finger_note='このタッチパッドは2本指スクロールに対応していません'
         else
@@ -288,84 +287,107 @@ run_gui() {
         fi
     fi
 
-    # 2026-09-12 実機フィードバック: 「自然」「従来どおり」は初心者に意味が
-    # 伝わりにくいため、指の動きとの関係で表現する文言へ変更した
-    # (設定ファイルのon/off・内部のNatural Scrolling Enabled値は不変)。
-    if [ "$NATURAL_SCROLLING" = "on" ]; then
-        scroll_dir_field="^指の動きと同じ方向!指の動きと反対方向"
-    else
-        scroll_dir_field="指の動きと同じ方向!^指の動きと反対方向"
-    fi
-
-    case "$(pointer_speed_to_label "$POINTER_SPEED")" in
-    遅い) speed_field="^遅い!やや遅い!標準!やや速い!速い" ;;
-    やや遅い) speed_field="遅い!^やや遅い!標準!やや速い!速い" ;;
-    やや速い) speed_field="遅い!やや遅い!標準!^やや速い!速い" ;;
-    速い) speed_field="遅い!やや遅い!標準!やや速い!^速い" ;;
-    *) speed_field="遅い!やや遅い!^標準!やや速い!速い" ;;
-    esac
-
     dialog_text='タッチパッドの設定を変更します。'
     if [ -n "$two_finger_note" ]; then
         dialog_text="$(printf '%s\n%s' "$dialog_text" "$two_finger_note")"
     fi
 
-    result="$(yad --form --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
-        --text="$dialog_text" \
-        --field="タップでクリックする:CHK" "$tapping_yad" \
-        --field="2本指でスクロールする:CHK" "$two_finger_yad" \
-        --field="スクロール方向:CB" "$scroll_dir_field" \
-        --field="ポインタの速さ:CB" "$speed_field" \
-        --button="既定値に戻す:10" \
-        --button="適用:0" \
-        --button="閉じる:1")"
-    rc=$?
+    load_settings
 
-    case "$rc" in
-    0)
-        new_tapping="$(printf '%s' "$result" | cut -d'|' -f1)"
-        new_two_finger="$(printf '%s' "$result" | cut -d'|' -f2)"
-        new_scroll_dir="$(printf '%s' "$result" | cut -d'|' -f3)"
-        new_speed_label="$(printf '%s' "$result" | cut -d'|' -f4)"
+    # 「適用」(保存+反映してGUI継続)と「OK」(保存+反映してGUI終了)を
+    # 分離するため、確定するまでダイアログを再表示し続ける。ウィンドウを
+    # 閉じる/Escapeした場合(rc が 0/10/20 以外)は保存・反映せずループを
+    # 抜ける。「既定値に戻す」も表示内容を既定値に更新したうえでループを
+    # 継続する(GUIは閉じない)。
+    while :; do
+        tapping_yad="FALSE"
+        [ "$TAPPING" = "on" ] && tapping_yad="TRUE"
 
-        TAPPING="off"
-        [ "$new_tapping" = "TRUE" ] && TAPPING="on"
+        if [ "$two_finger_ok" -eq 1 ]; then
+            two_finger_yad="FALSE"
+            [ "$TWO_FINGER_SCROLL" = "on" ] && two_finger_yad="TRUE"
+        else
+            two_finger_yad="@disabled@"
+        fi
 
-        TWO_FINGER_SCROLL="off"
-        [ "$new_two_finger" = "TRUE" ] && TWO_FINGER_SCROLL="on"
+        # 2026-09-12 実機フィードバック: 「自然」「従来どおり」は初心者に
+        # 意味が伝わりにくいため、指の動きとの関係で表現する文言へ変更した
+        # (設定ファイルのon/off・内部のNatural Scrolling Enabled値は不変)。
+        if [ "$NATURAL_SCROLLING" = "on" ]; then
+            scroll_dir_field="^指の動きと同じ方向!指の動きと反対方向"
+        else
+            scroll_dir_field="指の動きと同じ方向!^指の動きと反対方向"
+        fi
 
-        NATURAL_SCROLLING="off"
-        [ "$new_scroll_dir" = "指の動きと同じ方向" ] && NATURAL_SCROLLING="on"
+        case "$(pointer_speed_to_label "$POINTER_SPEED")" in
+        遅い) speed_field="^遅い!やや遅い!標準!やや速い!速い" ;;
+        やや遅い) speed_field="遅い!^やや遅い!標準!やや速い!速い" ;;
+        やや速い) speed_field="遅い!やや遅い!標準!^やや速い!速い" ;;
+        速い) speed_field="遅い!やや遅い!標準!やや速い!^速い" ;;
+        *) speed_field="遅い!やや遅い!^標準!やや速い!速い" ;;
+        esac
 
-        POINTER_SPEED="$(pointer_label_to_speed "$new_speed_label")"
+        result="$(yad --form --title="MyPocketOS" --center --on-top --skip-taskbar --no-markup \
+            --text="$dialog_text" \
+            --field="タップでクリックする:CHK" "$tapping_yad" \
+            --field="2本指でスクロールする:CHK" "$two_finger_yad" \
+            --field="スクロール方向:CB" "$scroll_dir_field" \
+            --field="ポインタの速さ:CB" "$speed_field" \
+            --button="既定値に戻す:10" \
+            --button="適用:20" \
+            --button="OK:0")"
+        rc=$?
 
-        # yadの出力は上記の固定選択肢のいずれかのはずだが、念のため
-        # 最終防衛としてもう一度検証を通す。
-        TAPPING="$(validate_on_off "$TAPPING" on)"
-        TWO_FINGER_SCROLL="$(validate_on_off "$TWO_FINGER_SCROLL" on)"
-        NATURAL_SCROLLING="$(validate_on_off "$NATURAL_SCROLLING" on)"
-        POINTER_SPEED="$(validate_pointer_speed "$POINTER_SPEED")"
+        case "$rc" in
+        0 | 20)
+            new_tapping="$(printf '%s' "$result" | cut -d'|' -f1)"
+            new_two_finger="$(printf '%s' "$result" | cut -d'|' -f2)"
+            new_scroll_dir="$(printf '%s' "$result" | cut -d'|' -f3)"
+            new_speed_label="$(printf '%s' "$result" | cut -d'|' -f4)"
 
-        if conf_write "$TAPPING" "$TWO_FINGER_SCROLL" "$NATURAL_SCROLLING" "$POINTER_SPEED"; then
+            TAPPING="off"
+            [ "$new_tapping" = "TRUE" ] && TAPPING="on"
+
+            TWO_FINGER_SCROLL="off"
+            [ "$new_two_finger" = "TRUE" ] && TWO_FINGER_SCROLL="on"
+
+            NATURAL_SCROLLING="off"
+            [ "$new_scroll_dir" = "指の動きと同じ方向" ] && NATURAL_SCROLLING="on"
+
+            POINTER_SPEED="$(pointer_label_to_speed "$new_speed_label")"
+
+            # yadの出力は上記の固定選択肢のいずれかのはずだが、念のため
+            # 最終防衛としてもう一度検証を通す。
+            TAPPING="$(validate_on_off "$TAPPING" on)"
+            TWO_FINGER_SCROLL="$(validate_on_off "$TWO_FINGER_SCROLL" on)"
+            NATURAL_SCROLLING="$(validate_on_off "$NATURAL_SCROLLING" on)"
+            POINTER_SPEED="$(validate_pointer_speed "$POINTER_SPEED")"
+
+            if conf_write "$TAPPING" "$TWO_FINGER_SCROLL" "$NATURAL_SCROLLING" "$POINTER_SPEED"; then
+                if ! apply_settings $ids; then
+                    notice '一部のタッチパッドに設定を適用できませんでした。'
+                fi
+            else
+                notice '設定を保存できませんでした。'
+            fi
+
+            [ "$rc" -eq 0 ] && break
+            ;;
+        10)
+            conf_reset
+            load_defaults
             if ! apply_settings $ids; then
                 notice '一部のタッチパッドに設定を適用できませんでした。'
             fi
-        else
-            notice '設定を保存できませんでした。'
-        fi
-        ;;
-    10)
-        conf_reset
-        load_defaults
-        if ! apply_settings $ids; then
-            notice '一部のタッチパッドに設定を適用できませんでした。'
-        fi
-        ;;
-    *)
-        # 閉じる(1)・Escape(252)・timeout(70)等はすべて「何もしない」。
-        # 設定ファイル・XInputプロパティのいずれも変更しない。
-        ;;
-    esac
+            ;;
+        *)
+            # ウィンドウを閉じる(X)・Escape(252)・timeout(70)等はすべて
+            # 「何もしない」。この時点で未適用の変更は保存・反映しない
+            # (既に「適用」済みの設定はそのまま維持される)。
+            break
+            ;;
+        esac
+    done
 }
 
 # ---- --applyモード (Openbox autostart専用、常に無言) -----------------------

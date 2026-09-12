@@ -147,14 +147,29 @@ chmod +x "${MOCKDIR}/xinput"
 
 cat >"${MOCKDIR}/yad" <<'MOCKEOF'
 #!/bin/sh
+# 2026-09-12: 「適用」で確定するまでダイアログを再表示し続けるループへ変更
+# したため、yad_stdout/yad_exit を「1呼び出し=1行」のキュー(N回目の
+# 呼び出しにはN行目を使う)として扱う。1行しか書かれていない既存テストは
+# 常に1行目を使い続けるため後方互換になる。
 printf '%s\n' "$*" >>"${MOCK_STATE_DIR}/yad_calls.txt"
+
+count_file="${MOCK_STATE_DIR}/yad_call_count"
+n=0
+[ -f "${count_file}" ] && n="$(cat "${count_file}")"
+n=$((n + 1))
+printf '%s\n' "${n}" >"${count_file}"
+
 if [ -f "${MOCK_STATE_DIR}/yad_stdout" ]; then
-	cat "${MOCK_STATE_DIR}/yad_stdout"
+	line="$(sed -n "${n}p" "${MOCK_STATE_DIR}/yad_stdout")"
+	[ -n "${line}" ] && printf '%s\n' "${line}"
 fi
+
+exit_code=""
 if [ -f "${MOCK_STATE_DIR}/yad_exit" ]; then
-	exit "$(cat "${MOCK_STATE_DIR}/yad_exit")"
+	exit_code="$(sed -n "${n}p" "${MOCK_STATE_DIR}/yad_exit")"
+	[ -z "${exit_code}" ] && exit_code="$(tail -n1 "${MOCK_STATE_DIR}/yad_exit")"
 fi
-exit 0
+exit "${exit_code:-0}"
 MOCKEOF
 chmod +x "${MOCKDIR}/yad"
 
@@ -164,7 +179,7 @@ cp "${MOCKDIR}/yad" "${MOCKDIR}/yadonly/yad"
 reset_mock_state() {
 	rm -f "${MOCKDIR}"/ids.txt "${MOCKDIR}"/props_*.txt "${MOCKDIR}"/fail_ids.txt \
 		"${MOCKDIR}"/set_prop_calls.txt "${MOCKDIR}"/yad_calls.txt \
-		"${MOCKDIR}"/yad_stdout "${MOCKDIR}"/yad_exit
+		"${MOCKDIR}"/yad_stdout "${MOCKDIR}"/yad_exit "${MOCKDIR}"/yad_call_count
 	: >"${MOCKDIR}/set_prop_calls.txt"
 	: >"${MOCKDIR}/yad_calls.txt"
 	rm -rf "${FAKE_HOME}/.config"
@@ -458,6 +473,8 @@ check "22: initial CHK field passed to yad reflects the current on/on/on/0 confi
 check "22: initial CB field marks 指の動きと同じ方向/標準 as the default (^) selection for on/0 config" \
 	sh -c 'grep -qF "スクロール方向:CB ^指の動きと同じ方向!指の動きと反対方向" "$1" && grep -qF "ポインタの速さ:CB 遅い!やや遅い!^標準!やや速い!速い" "$1"' \
 	_ "${MOCKDIR}/yad_calls.txt"
+check "13: OK (rc=0) results in exactly one yad invocation (GUI closes immediately, no further loop iteration)" \
+	sh -c '[ "$(wc -l < "$1")" -eq 1 ]' _ "${MOCKDIR}/yad_calls.txt"
 
 # ---- 14: Cancel (yadが終了コード1を返す) → 何も変わらない ----
 reset_mock_state
@@ -474,6 +491,8 @@ check "14: Cancel does not call set-prop at all" \
 	test ! -s "${MOCKDIR}/set_prop_calls.txt"
 
 # ---- 15: Default reset (yadが終了コード10を返す) → 設定ファイルが削除される ----
+# 2026-09-12: 既定値に戻してもGUIは閉じない仕様になったため、ループを
+# 終わらせるための2回目の呼び出し(Escape相当、rc=1)を続けて用意する。
 reset_mock_state
 printf '10\n' >"${MOCKDIR}/ids.txt"
 write_touchpad_props 10
@@ -484,7 +503,10 @@ mkdir -p "$(dirname "${CONF_PATH}")"
 	printf 'NATURAL_SCROLLING=off\n'
 	printf 'POINTER_SPEED=2\n'
 } >"${CONF_PATH}"
-printf '10\n' >"${MOCKDIR}/yad_exit"
+{
+	printf '10\n'
+	printf '1\n'
+} >"${MOCKDIR}/yad_exit"
 run_gui
 check "15: Default reset DELETES the config file (not overwrite)" \
 	test ! -e "${CONF_PATH}"
@@ -570,6 +592,101 @@ write_touchpad_props_no2f 12
 run_gui
 check "21: single non-supporting touchpad shows the singular-form note" \
 	grep -q 'このタッチパッドは2本指スクロールに対応していません' "${MOCKDIR}/yad_calls.txt"
+
+# ---- 23: 適用 (rc=20) → 保存+反映されるがGUIは閉じず、再度別の値で適用しOKで終了できる ----
+reset_mock_state
+printf '10\n' >"${MOCKDIR}/ids.txt"
+write_touchpad_props 10
+mkdir -p "$(dirname "${CONF_PATH}")"
+{
+	printf 'TAPPING=on\n'
+	printf 'TWO_FINGER_SCROLL=on\n'
+	printf 'NATURAL_SCROLLING=on\n'
+	printf 'POINTER_SPEED=0\n'
+} >"${CONF_PATH}"
+{
+	printf 'FALSE|TRUE|指の動きと反対方向|やや速い|\n'
+	printf 'TRUE|TRUE|指の動きと同じ方向|速い|\n'
+} >"${MOCKDIR}/yad_stdout"
+{
+	printf '20\n'
+	printf '0\n'
+} >"${MOCKDIR}/yad_exit"
+run_gui
+check "23 (1): Apply (20) results in more than one yad invocation (GUI stays open)" \
+	sh -c '[ "$(wc -l < "$1")" -eq 2 ]' _ "${MOCKDIR}/yad_calls.txt"
+check "23 (2): the first Apply's Tapping=off is actually reflected via set-prop before the second call" \
+	sh -c '[ "$(grep -c "^10 libinput Tapping Enabled" "$1")" -eq 2 ]' _ "${MOCKDIR}/set_prop_calls.txt"
+check "23 (3): after Apply then OK with a new value, the config file reflects the SECOND (latest) value" \
+	grep -qx 'TAPPING=on' "${CONF_PATH}"
+check "23 (4): the final POINTER_SPEED reflects the second Apply's 速い (2), confirming re-adjustment after the first Apply took effect" \
+	grep -qx 'POINTER_SPEED=2' "${CONF_PATH}"
+check "23 (5): xinput was updated for both the first (やや速い=0.4) and second (速い=0.8) Apply" \
+	sh -c 'grep -q "libinput Accel Speed 0.4$" "$1" && grep -q "libinput Accel Speed 0.8$" "$1"' _ "${MOCKDIR}/set_prop_calls.txt"
+
+# ---- 24: 適用してからEscape → 適用済みの内容は維持され、Escape時の未適用の変更は保存されない ----
+reset_mock_state
+printf '10\n' >"${MOCKDIR}/ids.txt"
+write_touchpad_props 10
+mkdir -p "$(dirname "${CONF_PATH}")"
+{
+	printf 'TAPPING=on\n'
+	printf 'TWO_FINGER_SCROLL=on\n'
+	printf 'NATURAL_SCROLLING=on\n'
+	printf 'POINTER_SPEED=0\n'
+} >"${CONF_PATH}"
+{
+	printf 'FALSE|TRUE|指の動きと反対方向|標準|\n'
+	printf 'TRUE|TRUE|指の動きと同じ方向|速い|\n'
+} >"${MOCKDIR}/yad_stdout"
+{
+	printf '20\n'
+	printf '252\n'
+} >"${MOCKDIR}/yad_exit"
+run_gui
+check "24 (1): Apply then Escape results in exactly two yad invocations (loop continued once, then exited)" \
+	sh -c '[ "$(wc -l < "$1")" -eq 2 ]' _ "${MOCKDIR}/yad_calls.txt"
+check "24 (2): the config file reflects only the applied (first call's) TAPPING=off, not the escaped second call" \
+	grep -qx 'TAPPING=off' "${CONF_PATH}"
+check "24 (3): the config file reflects only the applied (first call's) POINTER_SPEED=0 (標準), not the escaped 速い" \
+	grep -qx 'POINTER_SPEED=0' "${CONF_PATH}"
+check "24 (4): the escaped second call's field values (速い -> Accel Speed 0.8) are never applied to xinput" \
+	sh -c '! grep -q "libinput Accel Speed 0.8" "$1"' _ "${MOCKDIR}/set_prop_calls.txt"
+
+# ---- 25: 既定値に戻す (rc=10) → GUIは閉じず、表示も既定値へ更新される ----
+reset_mock_state
+printf '10\n' >"${MOCKDIR}/ids.txt"
+write_touchpad_props 10
+mkdir -p "$(dirname "${CONF_PATH}")"
+{
+	printf 'TAPPING=off\n'
+	printf 'TWO_FINGER_SCROLL=off\n'
+	printf 'NATURAL_SCROLLING=off\n'
+	printf 'POINTER_SPEED=2\n'
+} >"${CONF_PATH}"
+{
+	printf '10\n'
+	printf '1\n'
+} >"${MOCKDIR}/yad_exit"
+run_gui
+check "25 (1): Default reset results in exactly two yad invocations (GUI stays open after reset)" \
+	sh -c '[ "$(wc -l < "$1")" -eq 2 ]' _ "${MOCKDIR}/yad_calls.txt"
+check "25 (2): the second (post-reset) yad invocation shows the Tapping/Two-finger checkboxes reset to TRUE" \
+	sh -c 'sed -n "2p" "$1" | grep -qF "タップでクリックする:CHK TRUE" && sed -n "2p" "$1" | grep -qF "2本指でスクロールする:CHK TRUE"' \
+	_ "${MOCKDIR}/yad_calls.txt"
+check "25 (3): the second (post-reset) yad invocation marks 指の動きと同じ方向/標準 as the default (^) selection" \
+	sh -c 'sed -n "2p" "$1" | grep -qF "スクロール方向:CB ^指の動きと同じ方向!指の動きと反対方向" && sed -n "2p" "$1" | grep -qF "ポインタの速さ:CB 遅い!やや遅い!^標準!やや速い!速い"' \
+	_ "${MOCKDIR}/yad_calls.txt"
+
+# ---- 26: --apply モードの既存挙動に回帰がないこと (GUIループ変更の影響を受けない) ----
+reset_mock_state
+printf '10\n' >"${MOCKDIR}/ids.txt"
+write_touchpad_props 10
+run_apply
+check "26 (1): --apply still never invokes yad (no GUI loop involvement)" \
+	test ! -s "${MOCKDIR}/yad_calls.txt"
+check "26 (2): --apply still applies MyPocketOS defaults when no config file exists" \
+	prop_applied 10 "libinput Tapping Enabled 1$"
 
 echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"
 [ "${FAIL}" -eq 0 ]
