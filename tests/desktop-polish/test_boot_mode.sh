@@ -36,6 +36,25 @@ expect() {
 	fi
 }
 
+# Installed判定 (cmdline・mounts・live medium pathの3引数版) 用。
+# 本番呼び出し (引数無し) は実際の/proc/mounts・/run/live/mediumを見るが、
+# テストではこの3つ全てを差し替えて、実行環境 (このテストを走らせている
+# ホスト自体のroot filesystem種別等) に一切依存しないようにする。
+expect3() {
+	desc="$1"
+	cmdline_file="$2"
+	mounts_file="$3"
+	medium_path="$4"
+	want="$5"
+	got="$("${HELPER}" "${cmdline_file}" "${mounts_file}" "${medium_path}" 2>/dev/null || true)"
+	if [ "${got}" = "${want}" ]; then
+		PASS=$((PASS + 1))
+	else
+		echo "FAIL: ${desc} (got '${got}', want '${want}')" >&2
+		FAIL=$((FAIL + 1))
+	fi
+}
+
 check() {
 	desc="$1"
 	shift
@@ -79,6 +98,48 @@ expect "読み取り不可" "${TMPDIR}/unreadable" "Unknown"
 chmod 644 "${TMPDIR}/unreadable"
 
 #==========================
+# Installed判定 (cmdline・mounts・live medium pathを全て差し替えるテスト。
+# 実行環境のroot filesystem種別・/run/live/mediumの有無には依存しない)
+#==========================
+printf 'BOOT_IMAGE=/boot/vmlinuz-6.12.107+deb13-amd64 root=UUID=11111111-2222-3333-4444-555555555555 ro quiet splash' >"${TMPDIR}/installed_cmdline"
+printf '/dev/vda2 / ext4 rw,relatime 0 0\n' >"${TMPDIR}/mounts_ext4"
+printf '/dev/mapper/vgroot-root / xfs rw,relatime 0 0\n' >"${TMPDIR}/mounts_xfs"
+printf 'overlay / overlay rw 0 0\n' >"${TMPDIR}/mounts_overlay"
+printf 'aufs / aufs rw 0 0\n' >"${TMPDIR}/mounts_aufs"
+NO_MEDIUM="${TMPDIR}/no-such-medium"
+mkdir -p "${TMPDIR}/medium-exists"
+
+expect3 "installed (ext4 root, no live medium) -> Installed" \
+	"${TMPDIR}/installed_cmdline" "${TMPDIR}/mounts_ext4" "${NO_MEDIUM}" "Installed"
+
+expect3 "installed (xfsのような別FS root, no live medium) -> Installed (デバイス名・FS種別を固定条件にしていないことの確認)" \
+	"${TMPDIR}/installed_cmdline" "${TMPDIR}/mounts_xfs" "${NO_MEDIUM}" "Installed"
+
+expect3 "root fs種別がoverlayならInstalledにしない" \
+	"${TMPDIR}/installed_cmdline" "${TMPDIR}/mounts_overlay" "${NO_MEDIUM}" "Unknown"
+
+expect3 "root fs種別がaufsならInstalledにしない" \
+	"${TMPDIR}/installed_cmdline" "${TMPDIR}/mounts_aufs" "${NO_MEDIUM}" "Unknown"
+
+expect3 "root fsは通常でも/run/live/mediumが存在すればInstalledにしない" \
+	"${TMPDIR}/installed_cmdline" "${TMPDIR}/mounts_ext4" "${TMPDIR}/medium-exists" "Unknown"
+
+expect3 "cmdlineにboot=liveが残っていればInstalledにしない" \
+	"${TMPDIR}/only_p" "${TMPDIR}/mounts_ext4" "${NO_MEDIUM}" "Persistence"
+
+: >"${TMPDIR}/mounts_missing_marker"
+rm -f "${TMPDIR}/mounts_missing_marker"
+expect3 "mountsファイルが読み取れない場合はInstalledにしない" \
+	"${TMPDIR}/installed_cmdline" "${TMPDIR}/mounts_missing_marker" "${NO_MEDIUM}" "Unknown"
+
+# 既存の1引数呼び出し (cmdlineのみ差し替え) でも、実行環境の実際の
+# /proc/mounts・/run/live/mediumに関わらず、Live系トークンを含む
+# cmdlineであれば従来どおりUnknownになることを再確認する
+# (Installed判定ロジック追加による既存挙動への回帰がないことの確認)。
+expect "boot=liveを含むcmdlineは1引数呼び出しでもUnknownのまま" \
+	"${TMPDIR}/neither" "Unknown"
+
+#==========================
 # mypocketos-boot-mode.lua (静的確認。Luaインタプリタ・Conky実体は使わない)
 #==========================
 check "boot-mode Lua helper file exists" test -f "${LUA_FILE}"
@@ -92,6 +153,8 @@ check "Lua helper allow-list includes: Normal Live" \
 	grep -qF 'line == "Normal Live"' "${LUA_FILE}"
 check "Lua helper allow-list includes: Persistence" \
 	grep -qF 'line == "Persistence"' "${LUA_FILE}"
+check "Lua helper allow-list includes: Installed" \
+	grep -qF 'line == "Installed"' "${LUA_FILE}"
 check "Lua helper allow-list includes: Unknown" \
 	grep -qF 'line == "Unknown"' "${LUA_FILE}"
 
