@@ -8,11 +8,23 @@
 # (test_boot_mode.shと同じ方針)。実xinput・実jgmenu・実Calamaresは
 # 一切使用しない。
 #
+# 2026-09-15、実機VM確認により、Debian Live環境で実際にjgmenuへ表示
+# されるCalamares関連の.desktopが以下の2種類であることが判明した
+# (dpkg -S / dpkg-divertで確認済み)。
+#   - calamares-install-debian.desktop (Debian公式ラッパー入口)
+#   - calamares.desktop.orig (calamares-settings-debianがdpkg-divertで
+#     退避した、本体パッケージの素朴なdesktop entry)
+# 本テストはこの2ファイル構成に対する挙動を検証する(当初の単一
+# calamares.desktop想定からの修正)。
+#
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="${REPO_ROOT}/config/includes.chroot/usr/local/bin/mypocketos-installer-menu-state"
 AUTOSTART="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/openbox/autostart"
+
+DESKTOP_ID_ORIG='calamares.desktop.orig'
+DESKTOP_ID_INSTALL_DEBIAN='calamares-install-debian.desktop'
 
 PASS=0
 FAIL=0
@@ -31,9 +43,9 @@ check() {
 	fi
 }
 
+# $1 = HOMEディレクトリ, $2 = desktop ID (ファイル名)
 target_path() {
-	# $1 = HOMEディレクトリ
-	printf '%s/.local/share/applications/calamares.desktop' "$1"
+	printf '%s/.local/share/applications/%s' "$1" "$2"
 }
 
 new_home() {
@@ -42,52 +54,50 @@ new_home() {
 	printf '%s' "$h"
 }
 
+expected_managed_content() {
+	printf '[Desktop Entry]\nHidden=true\nX-MyPocketOS-Managed=true'
+}
+
 check "production script exists" test -f "${SCRIPT}"
 check "production script is executable" test -x "${SCRIPT}"
 
 #==========================
-# 1. Installed -> Hidden overrideを作成する
+# 1・2. Normal Live: calamares.desktop.orig を隠し、
+#       calamares-install-debian.desktop は隠さない
 #==========================
 h1="$(new_home)"
-HOME="$h1" "${SCRIPT}" Installed
-check "Installed: override file is created" test -f "$(target_path "$h1")"
+HOME="$h1" "${SCRIPT}" "Normal Live"
+check "Normal Live: calamares.desktop.orig Hidden override is created" \
+	test -f "$(target_path "$h1" "${DESKTOP_ID_ORIG}")"
+check "Normal Live: calamares.desktop.orig content is Hidden=true + managed marker" \
+	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h1" "${DESKTOP_ID_ORIG}")" "$(expected_managed_content)"
+check "Normal Live: calamares-install-debian.desktop Hidden override does NOT exist (installer stays visible)" \
+	sh -c '[ ! -e "$1" ]' _ "$(target_path "$h1" "${DESKTOP_ID_INSTALL_DEBIAN}")"
 
 #==========================
-# 2. Installed時の内容 -> Hidden=true・MyPocketOS管理と識別可能
-#==========================
-check "Installed: content is exactly [Desktop Entry]/Hidden=true/marker" \
-	sh -c '
-	want="$(printf "[Desktop Entry]\nHidden=true\nX-MyPocketOS-Managed=true")"
-	got="$(cat "$1")"
-	[ "$got" = "$want" ]
-	' _ "$(target_path "$h1")"
-check "Installed: marker line X-MyPocketOS-Managed=true is present" \
-	grep -qxF 'X-MyPocketOS-Managed=true' "$(target_path "$h1")"
-check "Installed: Hidden=true line is present" \
-	grep -qxF 'Hidden=true' "$(target_path "$h1")"
-
-#==========================
-# 3. Normal Live -> Calamaresを隠さない (overrideを削除する)
+# 3・4. Persistence: Normal Liveと同じ
 #==========================
 h2="$(new_home)"
-HOME="$h2" "${SCRIPT}" Installed
-check "precondition: override exists before Normal Live test" test -f "$(target_path "$h2")"
-HOME="$h2" "${SCRIPT}" "Normal Live"
-check "Normal Live: managed override is removed (Calamares becomes visible again)" \
-	sh -c '[ ! -e "$1" ]' _ "$(target_path "$h2")"
+HOME="$h2" "${SCRIPT}" Persistence
+check "Persistence: calamares.desktop.orig Hidden override is created" \
+	test -f "$(target_path "$h2" "${DESKTOP_ID_ORIG}")"
+check "Persistence: calamares-install-debian.desktop Hidden override does NOT exist (installer stays visible)" \
+	sh -c '[ ! -e "$1" ]' _ "$(target_path "$h2" "${DESKTOP_ID_INSTALL_DEBIAN}")"
 
 #==========================
-# 4. Persistence -> Calamaresを隠さない (overrideを削除する)
+# 5・6. Installed: 両方隠す
 #==========================
 h3="$(new_home)"
 HOME="$h3" "${SCRIPT}" Installed
-check "precondition: override exists before Persistence test" test -f "$(target_path "$h3")"
-HOME="$h3" "${SCRIPT}" Persistence
-check "Persistence: managed override is removed (Calamares becomes visible again)" \
-	sh -c '[ ! -e "$1" ]' _ "$(target_path "$h3")"
+check "Installed: calamares.desktop.orig Hidden override is created" \
+	test -f "$(target_path "$h3" "${DESKTOP_ID_ORIG}")"
+check "Installed: calamares-install-debian.desktop Hidden override is created" \
+	test -f "$(target_path "$h3" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+check "Installed: calamares-install-debian.desktop content is Hidden=true + managed marker" \
+	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h3" "${DESKTOP_ID_INSTALL_DEBIAN}")" "$(expected_managed_content)"
 
 #==========================
-# 5. Unknown -> 既存状態を破壊しない
+# 7. Unknown: 両方とも状態変更しない
 #==========================
 h4="$(new_home)"
 HOME="$h4" "${SCRIPT}" Unknown
@@ -96,88 +106,122 @@ check "Unknown (no prior state): does not create ~/.local/share/applications at 
 
 h5="$(new_home)"
 HOME="$h5" "${SCRIPT}" Installed
-check "precondition: override exists before Unknown-preserves test" test -f "$(target_path "$h5")"
 HOME="$h5" "${SCRIPT}" Unknown
-check "Unknown (existing managed override present): leaves it untouched (fail-closed, no action either way)" \
-	test -f "$(target_path "$h5")"
+check "Unknown (existing state present): calamares.desktop.orig left untouched" \
+	test -f "$(target_path "$h5" "${DESKTOP_ID_ORIG}")"
+check "Unknown (existing state present): calamares-install-debian.desktop left untouched" \
+	test -f "$(target_path "$h5" "${DESKTOP_ID_INSTALL_DEBIAN}")"
 
 #==========================
-# 6. Installedを複数回実行 -> 冪等 (mtimeが変化しない)
+# 8・9. Installed -> Normal Live / Persistence:
+#       calamares-install-debian.desktopのMyPocketOS管理overrideだけ削除
 #==========================
 h6="$(new_home)"
 HOME="$h6" "${SCRIPT}" Installed
-mtime_before="$(stat -c '%Y' "$(target_path "$h6")")"
-sleep 1
-HOME="$h6" "${SCRIPT}" Installed
-mtime_after="$(stat -c '%Y' "$(target_path "$h6")")"
-check "Installed run twice: idempotent, no unnecessary rewrite (mtime unchanged)" \
-	sh -c '[ "$1" = "$2" ]' _ "${mtime_before}" "${mtime_after}"
+HOME="$h6" "${SCRIPT}" "Normal Live"
+check "Installed->Normal Live: calamares-install-debian.desktop override removed" \
+	sh -c '[ ! -e "$1" ]' _ "$(target_path "$h6" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+check "Installed->Normal Live: calamares.desktop.orig stays hidden (10)" \
+	test -f "$(target_path "$h6" "${DESKTOP_ID_ORIG}")"
 
-#==========================
-# 7. Liveへ戻った場合 -> MyPocketOS管理overrideだけ削除できる
-#==========================
-# (3・4のシナリオで既に確認済みだが、Installed->Persistence->Normal Live
-# という往復シーケンスでも壊れないことを追加確認する)
 h7="$(new_home)"
 HOME="$h7" "${SCRIPT}" Installed
 HOME="$h7" "${SCRIPT}" Persistence
-check "after Installed->Persistence: override removed" sh -c '[ ! -e "$1" ]' _ "$(target_path "$h7")"
-HOME="$h7" "${SCRIPT}" Installed
-HOME="$h7" "${SCRIPT}" "Normal Live"
-check "after Installed->Normal Live: override removed" sh -c '[ ! -e "$1" ]' _ "$(target_path "$h7")"
+check "Installed->Persistence: calamares-install-debian.desktop override removed" \
+	sh -c '[ ! -e "$1" ]' _ "$(target_path "$h7" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+check "Installed->Persistence: calamares.desktop.orig stays hidden (10)" \
+	test -f "$(target_path "$h7" "${DESKTOP_ID_ORIG}")"
 
 #==========================
-# 8. ユーザーが独自に作った calamares.desktop を誤削除・誤上書きしない
+# 10. calamares.desktop.orig は Live/Persistence/Installed の全てで
+#     Hidden維持であることの直接的な確認(往復させても消えない)
 #==========================
 h8="$(new_home)"
-mkdir -p "${h8}/.local/share/applications"
-printf '[Desktop Entry]\nName=My Own Thing\n' >"$(target_path "$h8")"
-HOME="$h8" "${SCRIPT}" Installed
-check "Installed: does not overwrite a user-owned (non-managed) calamares.desktop" \
-	sh -c '[ "$(cat "$1")" = "$(printf "[Desktop Entry]\nName=My Own Thing")" ]' _ "$(target_path "$h8")"
 HOME="$h8" "${SCRIPT}" "Normal Live"
-check "Normal Live: does not delete a user-owned (non-managed) calamares.desktop" \
-	test -f "$(target_path "$h8")"
+HOME="$h8" "${SCRIPT}" Persistence
+HOME="$h8" "${SCRIPT}" Installed
+HOME="$h8" "${SCRIPT}" "Normal Live"
+check "calamares.desktop.orig remains hidden across Normal Live/Persistence/Installed transitions" \
+	test -f "$(target_path "$h8" "${DESKTOP_ID_ORIG}")"
 
 #==========================
-# 9. HOME未設定等 -> 安全に終了
+# 11・12. 両desktop IDについてユーザー独自ファイルを上書き・削除しない
+#==========================
+h9="$(new_home)"
+mkdir -p "${h9}/.local/share/applications"
+printf '[Desktop Entry]\nName=My Own Orig\n' >"$(target_path "$h9" "${DESKTOP_ID_ORIG}")"
+printf '[Desktop Entry]\nName=My Own InstallDebian\n' >"$(target_path "$h9" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+HOME="$h9" "${SCRIPT}" Installed
+check "Installed: does not overwrite a user-owned (non-managed) calamares.desktop.orig" \
+	sh -c '[ "$(cat "$1")" = "$(printf "[Desktop Entry]\nName=My Own Orig")" ]' _ "$(target_path "$h9" "${DESKTOP_ID_ORIG}")"
+check "Installed: does not overwrite a user-owned (non-managed) calamares-install-debian.desktop" \
+	sh -c '[ "$(cat "$1")" = "$(printf "[Desktop Entry]\nName=My Own InstallDebian")" ]' _ "$(target_path "$h9" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+HOME="$h9" "${SCRIPT}" "Normal Live"
+check "Normal Live: does not delete a user-owned (non-managed) calamares.desktop.orig" \
+	test -f "$(target_path "$h9" "${DESKTOP_ID_ORIG}")"
+check "Normal Live: does not delete a user-owned (non-managed) calamares-install-debian.desktop" \
+	test -f "$(target_path "$h9" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+
+#==========================
+# 13. 両desktop IDについてsymlink防御
+#==========================
+h10="$(new_home)"
+mkdir -p "${h10}/.local/share/applications"
+ln -s /etc/passwd "$(target_path "$h10" "${DESKTOP_ID_ORIG}")"
+ln -s /etc/hostname "$(target_path "$h10" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+HOME="$h10" "${SCRIPT}" Installed
+check "Installed: does not follow/overwrite calamares.desktop.orig when it is itself a symlink" \
+	sh -c '[ -L "$1" ] && [ "$(readlink "$1")" = "/etc/passwd" ]' _ "$(target_path "$h10" "${DESKTOP_ID_ORIG}")"
+check "Installed: does not follow/overwrite calamares-install-debian.desktop when it is itself a symlink" \
+	sh -c '[ -L "$1" ] && [ "$(readlink "$1")" = "/etc/hostname" ]' _ "$(target_path "$h10" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+HOME="$h10" "${SCRIPT}" "Normal Live"
+check "Normal Live: does not delete calamares-install-debian.desktop when it is itself a symlink" \
+	test -L "$(target_path "$h10" "${DESKTOP_ID_INSTALL_DEBIAN}")"
+check "Normal Live: does not touch calamares.desktop.orig when it is itself a symlink" \
+	test -L "$(target_path "$h10" "${DESKTOP_ID_ORIG}")"
+
+#==========================
+# 14. 冪等性 (両desktop IDともmtime不変)
+#==========================
+h11="$(new_home)"
+HOME="$h11" "${SCRIPT}" Installed
+mtime_orig_before="$(stat -c '%Y' "$(target_path "$h11" "${DESKTOP_ID_ORIG}")")"
+mtime_instdeb_before="$(stat -c '%Y' "$(target_path "$h11" "${DESKTOP_ID_INSTALL_DEBIAN}")")"
+sleep 1
+HOME="$h11" "${SCRIPT}" Installed
+mtime_orig_after="$(stat -c '%Y' "$(target_path "$h11" "${DESKTOP_ID_ORIG}")")"
+mtime_instdeb_after="$(stat -c '%Y' "$(target_path "$h11" "${DESKTOP_ID_INSTALL_DEBIAN}")")"
+check "Installed run twice: idempotent for calamares.desktop.orig (mtime unchanged)" \
+	sh -c '[ "$1" = "$2" ]' _ "${mtime_orig_before}" "${mtime_orig_after}"
+check "Installed run twice: idempotent for calamares-install-debian.desktop (mtime unchanged)" \
+	sh -c '[ "$1" = "$2" ]' _ "${mtime_instdeb_before}" "${mtime_instdeb_after}"
+
+#==========================
+# 15. HOME異常時安全終了
 #==========================
 check "HOME unset: exits 0 without error" \
 	sh -c 'env -u HOME "$1" Installed >/dev/null 2>&1' _ "${SCRIPT}"
 
-h9_notdir="${TMPDIR}/not-a-directory"
-: >"${h9_notdir}"
+h12_notdir="${TMPDIR}/not-a-directory"
+: >"${h12_notdir}"
 check "HOME points to a non-directory: exits 0 without creating anything" \
-	sh -c 'HOME="$1" "$2" Installed >/dev/null 2>&1; [ ! -e "$1.local" ]' _ "${h9_notdir}" "${SCRIPT}"
+	sh -c 'HOME="$1" "$2" Installed >/dev/null 2>&1; [ ! -e "$1.local" ]' _ "${h12_notdir}" "${SCRIPT}"
 
-h9_real="$(new_home)"
-h9_sym="${TMPDIR}/symlinked-home"
-ln -s "${h9_real}" "${h9_sym}"
+h12_real="$(new_home)"
+h12_sym="${TMPDIR}/symlinked-home"
+ln -s "${h12_real}" "${h12_sym}"
 check "HOME is a symlink: exits without writing through it" \
-	sh -c 'HOME="$1" "$2" Installed >/dev/null 2>&1; [ ! -e "$3/.local" ]' _ "${h9_sym}" "${SCRIPT}" "${h9_real}"
+	sh -c 'HOME="$1" "$2" Installed >/dev/null 2>&1; [ ! -e "$3/.local" ]' _ "${h12_sym}" "${SCRIPT}" "${h12_real}"
 
 #==========================
-# 10. mypocketos-boot-modeが失敗 -> 安全側で何もしない
+# 16. mypocketos-boot-modeが失敗 -> 安全側で何もしない
 #==========================
-h10="$(new_home)"
+h13="$(new_home)"
 check "mypocketos-boot-mode unavailable (broken PATH): falls back to Unknown, no-op" \
-	sh -c 'PATH=/nonexistent HOME="$1" "$2" >/dev/null 2>&1; [ ! -e "$1/.local/share/applications" ]' _ "${h10}" "${SCRIPT}"
+	sh -c 'PATH=/nonexistent HOME="$1" "$2" >/dev/null 2>&1; [ ! -e "$1/.local/share/applications" ]' _ "${h13}" "${SCRIPT}"
 
 #==========================
-# 追加: TARGET/対象ディレクトリがシンボリックリンクの場合の防御
-#==========================
-h11="$(new_home)"
-mkdir -p "${h11}/.local/share/applications"
-ln -s /etc/passwd "$(target_path "$h11")"
-HOME="$h11" "${SCRIPT}" Installed
-check "Installed: does not follow/overwrite when target path is itself a symlink" \
-	sh -c '[ -L "$1" ] && [ "$(readlink "$1")" = "/etc/passwd" ]' _ "$(target_path "$h11")"
-HOME="$h11" "${SCRIPT}" "Normal Live"
-check "Normal Live: does not delete when target path is itself a symlink" \
-	test -L "$(target_path "$h11")"
-
-#==========================
-# autostart連携の静的確認
+# 17. autostartからの呼び出しは1回のみ
 #==========================
 # コメント中の "mypocketos-installer-menu-state(1)" のような言及と、
 # 実際の呼び出し行 (行頭から行末まで、引数なしのコマンド単体) を区別する
