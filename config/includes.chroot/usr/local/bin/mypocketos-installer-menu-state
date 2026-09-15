@@ -1,0 +1,164 @@
+#!/bin/sh
+#
+# mypocketos-installer-menu-state - Installed環境でCalamares(GUIインストーラー)
+#                                    のjgmenuメニュー項目を非表示にする
+#
+# 背景:
+# Installed system上でも /usr/share/applications/calamares.desktop が
+# 存在するため、jgmenuの csv_cmd=apps (XDG .desktop 列挙) がこれを拾い、
+# 「システムをインストール」がメニューに表示され続けてしまう。誤って
+# インストール済みシステム上で再インストーラーを起動できる状態は避けたい。
+# 一方、Live環境 (Normal Live / Persistence) では引き続き表示したい。
+#
+# 方式:
+# ${HOME}/.local/share/applications/calamares.desktop に Hidden=true を
+# 置く、標準的なXDG Desktop Entry仕様のoverride機構を使う。
+# freedesktop.org Desktop Entry Specification の "Hidden" キーの説明:
+# 「上位ディレクトリ (システムディレクトリ等) に存在する同一desktop ID
+# のファイルを、そのユーザーにとって『存在しないのと同等』にできる、
+# 正式にサポートされた仕組み」であり、Calamares本体・
+# calamares-settings-debianパッケージへの変更は一切不要。実機VM検証済み
+# (jgmenu_run apps の出力から該当項目が消えることを確認)。
+#
+# 起動モード判定は既存の mypocketos-boot-mode(1) をそのまま再利用する
+# (Normal Live / Persistence / Installed / Unknown の4状態)。新規の
+# Live/Installed判定ロジックはここでは作らない。
+#
+#   Installed    -> Hidden overrideを作成する(既に期待どおりの内容なら
+#                    何もしない。MyPocketOS管理でない既存ファイルが
+#                    あれば上書きしない)
+#   Normal Live  -> MyPocketOS管理のHidden overrideが残っていれば削除する
+#                    (誤って作成されたoverrideがLiveで残り続けることを
+#                    防ぐ)
+#   Persistence  -> 同上(${HOME}が永続化されるため、Installedを経由した
+#                    痕跡が万一残っていても、Persistence起動のたびに
+#                    自動的に取り除かれるようにする)
+#   Unknown      -> 何もしない(fail-closed。表示/非表示どちらの判断も
+#                    誤りうるため、判定不能時は現状を変更しない)
+#
+# 安全設計:
+# - sudo・root権限は一切使わない。${HOME}配下のみを操作し、
+#   /usr/share/applications/calamares.desktop自体・Calamaresパッケージ
+#   には一切触れない。
+# - 対象ファイル・対象ディレクトリがシンボリックリンクの場合は、
+#   作成・削除のいずれも行わない(fail-safe。想定外のパスへの書き込み・
+#   削除事故を避けるため)。
+# - MyPocketOS自身が作成したファイルであることを、専用マーカー行
+#   (X-MyPocketOS-Managed=true)で識別する。これはfreedesktop.org
+#   Desktop Entry Specification "Extending the format" 節が定める
+#   X-PRODUCT形式の正式なベンダー拡張キーであり(例: X-NewDesktop-Foo
+#   と同じ形式)、既存の認識済みキーとの衝突はない。このマーカーを
+#   含まないファイル(利用者自身が作成した可能性がある)は、Installed
+#   時にも上書きせず、Live/Persistence時にも一切削除しない。
+# - 書き込みは mktemp (同一ディレクトリ) + mv によるatomic置換で行う。
+# - 既に期待する内容と完全に一致する場合は書き込みを行わない(冪等性。
+#   ログインのたびに実行されても不要な副作用(mtime変化等)を起こさない)。
+# - ${HOME}が未設定・空・ディレクトリでない・シンボリックリンクの場合は
+#   何もしない。
+# - mypocketos-boot-modeの実行に失敗した場合もUnknown同様に何もしない。
+#
+# 使い方:
+#   mypocketos-installer-menu-state       - 本番呼び出し。mypocketos-
+#                                            boot-modeで実際の起動モード
+#                                            を判定する(引数無し)
+#   mypocketos-installer-menu-state MODE  - MODEを起動モードとして直接
+#                                            使う(テスト専用。本番の
+#                                            呼び出し(autostart)では
+#                                            引数を渡さない)
+#
+set -u
+
+MANAGED_MARKER='X-MyPocketOS-Managed=true'
+DESKTOP_ID='calamares.desktop'
+
+MODE_OVERRIDE="${1:-}"
+
+expected_content() {
+	printf '[Desktop Entry]\nHidden=true\n%s\n' "${MANAGED_MARKER}"
+}
+
+# 対象ファイルが「MyPocketOSが作成・管理しているもの」かどうかを判定する。
+# 通常ファイルであり(シンボリックリンクではない)、かつマーカー行を
+# 含む場合のみ「管理対象」とみなす。判定できない場合は安全側(管理対象
+# ではない)へ倒す。
+is_managed_file() {
+	[ -f "$1" ] || return 1
+	[ -L "$1" ] && return 1
+	grep -qxF "${MANAGED_MARKER}" "$1" 2>/dev/null
+}
+
+create_hidden_override() {
+	if [ -e "${TARGET}" ]; then
+		if [ -L "${TARGET}" ]; then
+			# シンボリックリンクには一切触れない。
+			return 0
+		fi
+		if [ -f "${TARGET}" ]; then
+			if [ "$(cat "${TARGET}" 2>/dev/null)" = "$(expected_content)" ]; then
+				# 既に期待どおりの内容 (冪等)。
+				return 0
+			fi
+			if ! is_managed_file "${TARGET}"; then
+				# MyPocketOS管理でない既存ファイル (利用者自身が作成した
+				# 可能性がある) は上書きしない。
+				return 0
+			fi
+			# ここに到達するのは「MyPocketOS管理だが内容が古い」場合のみ。
+			# このまま下の書き込み処理へ進み、atomicに更新する。
+		else
+			# 通常ファイルでもシンボリックリンクでもない (ディレクトリ等)
+			# 想定外の種別には触れない。
+			return 0
+		fi
+	fi
+
+	if [ -e "${APPS_DIR}" ]; then
+		[ -L "${APPS_DIR}" ] && return 0
+		[ -d "${APPS_DIR}" ] || return 0
+	else
+		mkdir -p "${APPS_DIR}" 2>/dev/null || return 0
+	fi
+	[ -w "${APPS_DIR}" ] || return 0
+
+	tmp_file="$(mktemp "${APPS_DIR}/calamares.desktop.XXXXXX" 2>/dev/null)" || return 0
+	if expected_content >"${tmp_file}" 2>/dev/null; then
+		mv -f "${tmp_file}" "${TARGET}" 2>/dev/null || rm -f "${tmp_file}"
+	else
+		rm -f "${tmp_file}"
+	fi
+}
+
+remove_hidden_override_if_managed() {
+	[ -e "${TARGET}" ] || return 0
+	is_managed_file "${TARGET}" || return 0
+	rm -f "${TARGET}" 2>/dev/null
+}
+
+# ${HOME}の検証: 未設定・空・シンボリックリンク・ディレクトリでない
+# 場合は何もせず終了する。
+[ -n "${HOME:-}" ] || exit 0
+[ -L "${HOME}" ] && exit 0
+[ -d "${HOME}" ] || exit 0
+
+APPS_DIR="${HOME}/.local/share/applications"
+TARGET="${APPS_DIR}/${DESKTOP_ID}"
+
+mode="${MODE_OVERRIDE}"
+if [ -z "${mode}" ]; then
+	mode="$(mypocketos-boot-mode 2>/dev/null)" || mode="Unknown"
+	[ -n "${mode}" ] || mode="Unknown"
+fi
+
+case "${mode}" in
+Installed)
+	create_hidden_override
+	;;
+"Normal Live" | Persistence)
+	remove_hidden_override_if_managed
+	;;
+*)
+	: # Unknown、およびその他の想定外の値は何もしない (fail-closed)。
+	;;
+esac
+
+exit 0
