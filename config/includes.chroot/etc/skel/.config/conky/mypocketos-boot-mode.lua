@@ -7,7 +7,7 @@
 --
 -- 起動モードの判定自体 (mypocketos-boot-mode) はここでは行わない。Openbox
 -- autostartが起動時に1回だけ実行し、結果をXDG_RUNTIME_DIR配下のファイルへ
--- 書き込む。ここでは、そのファイルの内容が許可された3値のいずれかで
+-- 書き込む。ここでは、そのファイルの内容が許可された4値のいずれかで
 -- あることだけを確認する。それ以外 (XDG_RUNTIME_DIR未設定・ファイル無し・
 -- 想定外の内容) は、すべて安全側の "Unknown" へfail-closeする。
 
@@ -25,7 +25,7 @@ function conky_mypocketos_boot_mode()
     local line = f:read("*l")
     f:close()
 
-    if line == "Normal Live" or line == "Persistence" or line == "Unknown" then
+    if line == "Normal Live" or line == "Persistence" or line == "Installed" or line == "Unknown" then
         return line
     end
 

@@ -42,6 +42,14 @@ write_boot_mode_state() {
 }
 write_boot_mode_state
 
+# Installed system上でjgmenuの「システムをインストール」
+# (Calamares、/usr/share/applications/calamares.desktop)が誤って表示
+# されないよう、起動モードに応じて隠す/隠さないを判定する。判定ロジック
+# 自体はmypocketos-boot-mode(1)を再利用し、Hidden overrideの作成・削除
+# はwrite_boot_mode_stateへ埋め込まず専用スクリプトへ責務を分離している
+# (詳細はmypocketos-installer-menu-state(1)のコメント参照)。
+mypocketos-installer-menu-state
+
 # -p: 起動直後の競合を避けるため数秒待ってから開始 (man conky(1) -p/--pause)
 # -U: 既にconkyが起動していれば多重起動しない (man conky(1) -U/--unique)
 conky -p 3 -U &

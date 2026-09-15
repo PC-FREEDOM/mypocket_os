@@ -1,33 +1,66 @@
 #!/bin/sh
 #
-# mypocketos-boot-mode - 起動モード (Normal Live / Persistence / Unknown) を判定する
+# mypocketos-boot-mode - 起動モード (Normal Live / Persistence / Installed /
+#                        Unknown) を判定する
 #
 # 使い方:
-#   mypocketos-boot-mode        - /proc/cmdline を読んで判定する (本番呼び出し)
-#   mypocketos-boot-mode FILE   - FILE を /proc/cmdline の代わりに読む (テスト専用。
-#                                 本番の呼び出し (autostart) では引数を渡さない)
+#   mypocketos-boot-mode                          - 本番呼び出し。/proc/cmdline・
+#                                                    /proc/mounts・/run/live/medium
+#                                                    を読んで判定する
+#   mypocketos-boot-mode CMDLINE_FILE             - CMDLINE_FILEを/proc/cmdlineの
+#                                                    代わりに読む (テスト専用)
+#   mypocketos-boot-mode CMDLINE_FILE MOUNTS_FILE LIVE_MEDIUM_PATH
+#                                                  - 3つとも差し替える (テスト専用。
+#                                                    Installed判定のテストに使う)
+#   本番の呼び出し (autostart) では引数を渡さない。
 #
-# 判定ルール:
-# /proc/cmdline を空白区切りの完全一致トークンとして判定する (部分一致・
-# key=value形式は対象外)。
-#   persistence が1件・nopersistence が0件   -> Persistence
-#   persistence が0件・nopersistence が1件   -> Normal Live
-#   それ以外 (両方・重複・両方無し・読み取り失敗) -> Unknown (fail-closed)
+# 判定ルール (優先順、fail-closed。判定材料が読み取れない・矛盾する場合は
+# 必ずUnknownへ倒す):
 #
-# 副作用: 一切なし。標準出力へ上記3つのいずれか1行を出力するのみ。
+# 1. /proc/cmdline を空白区切りの完全一致トークンとして判定する (部分一致・
+#    key=value形式は対象外)。
+#      persistence が1件・nopersistence が0件   -> Persistence
+#      persistence が0件・nopersistence が1件   -> Normal Live
+#
+# 2. 上記いずれにも該当しない場合、cmdline自体が読み取れなかった・空だった
+#    場合はUnknown (Installedと誤判定しないためのガード。読み取り失敗は
+#    「Live痕跡が無いことの証拠」ではなく「判定不能」として扱う)。
+#
+# 3. cmdlineは読み取れたが上記1に該当しない場合、boot=liveトークンが
+#    1件でもあれば依然として何らかのLive実行中と考えられるためUnknown。
+#
+# 4. ここまでで「Live系トークンが一切無い、読み取り可能なcmdline」が
+#    確認できた場合のみ、追加で以下2点を確認する。いずれか一方でも
+#    Live実行中の可能性を示す場合はUnknown。
+#      - root filesystemの種別が overlay・aufs (live-bootの典型的な
+#        root構成) ではないこと (/dev/vda2やext4のような個別のデバイス
+#        名・FS種別を固定条件にしない。将来LUKSや別FSでも通常のFS種別
+#        である限り誤判定しない)
+#      - live-bootがLive媒体をマウントする場所 (既定 /run/live/medium)
+#        が存在しないこと
+#    両方を満たした場合のみ Installed とする。
+#
+# 副作用: 一切なし。標準出力へ上記4つのいずれか1行を出力するのみ。
 # 終了コードは常に0 (判定不能な場合もUnknownを出力したうえで0で終了する)。
 
 set -u
 
 CMDLINE_FILE="${1:-/proc/cmdline}"
+MOUNTS_FILE="${2:-/proc/mounts}"
+LIVE_MEDIUM_PATH="${3:-/run/live/medium}"
 
 content=""
+cmdline_ok=0
 if [ -r "${CMDLINE_FILE}" ]; then
 	content="$(cat "${CMDLINE_FILE}" 2>/dev/null)" || content=""
+	if [ -n "${content}" ]; then
+		cmdline_ok=1
+	fi
 fi
 
 persistence_count=0
 nopersistence_count=0
+bootlive_count=0
 
 for token in ${content}; do
 	case "${token}" in
@@ -37,13 +70,47 @@ for token in ${content}; do
 	nopersistence)
 		nopersistence_count=$((nopersistence_count + 1))
 		;;
+	boot=live)
+		bootlive_count=$((bootlive_count + 1))
+		;;
 	esac
 done
 
 if [ "${persistence_count}" -eq 1 ] && [ "${nopersistence_count}" -eq 0 ]; then
 	echo "Persistence"
-elif [ "${persistence_count}" -eq 0 ] && [ "${nopersistence_count}" -eq 1 ]; then
-	echo "Normal Live"
-else
-	echo "Unknown"
+	exit 0
 fi
+
+if [ "${persistence_count}" -eq 0 ] && [ "${nopersistence_count}" -eq 1 ]; then
+	echo "Normal Live"
+	exit 0
+fi
+
+if [ "${cmdline_ok}" -ne 1 ]; then
+	echo "Unknown"
+	exit 0
+fi
+
+if [ "${bootlive_count}" -ne 0 ]; then
+	echo "Unknown"
+	exit 0
+fi
+
+root_fstype=""
+if [ -r "${MOUNTS_FILE}" ]; then
+	root_fstype="$(awk '$2 == "/" { print $3; exit }' "${MOUNTS_FILE}" 2>/dev/null)" || root_fstype=""
+fi
+
+case "${root_fstype}" in
+overlay | aufs | "")
+	echo "Unknown"
+	exit 0
+	;;
+esac
+
+if [ -e "${LIVE_MEDIUM_PATH}" ]; then
+	echo "Unknown"
+	exit 0
+fi
+
+echo "Installed"

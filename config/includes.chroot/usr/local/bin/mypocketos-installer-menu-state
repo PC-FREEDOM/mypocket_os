@@ -1,0 +1,196 @@
+#!/bin/sh
+#
+# mypocketos-installer-menu-state - 起動モードに応じてjgmenuのCalamares
+#                                    関連メニュー項目を表示/非表示にする
+#
+# 背景 (2026-09-15 実機VM確認により判明、当初実装からの修正):
+# Debian Live環境でjgmenuに表示されるCalamares関連の.desktopは2種類ある。
+#
+#   1. /usr/share/applications/calamares-install-debian.desktop
+#      calamares-settings-debianが提供する正式な起動入口。
+#      Exec=calamares-install-debian (/etc/fstab退避・xhost設定・
+#      pkexec calamares・/etc/fstab復元まで行うDebian公式ラッパー)。
+#
+#   2. /usr/share/applications/calamares.desktop.orig
+#      Calamares本体パッケージが元々提供していた
+#      /usr/share/applications/calamares.desktop を、
+#      calamares-settings-debianがdpkg-divertで退避したファイル
+#      (dpkg -S で確認済み: 退避元 calamares.desktop、退避先
+#      calamares.desktop.orig)。中身は素朴な "sh -c \"pkexec calamares\""
+#      であり、/etc/fstab退避等のDebian公式ラッパー処理を経ない。
+#      dpkg-divertされている(=Debian側が意図的に隠そうとしている)にも
+#      関わらず、ファイル自体は/usr/share/applications配下に残るため、
+#      jgmenuのcsv_cmd=apps (XDG .desktop列挙) がこれも拾ってしまい、
+#      「Install Debian (Calamares Installer)」と「システムをインストール」
+#      の2つが重複表示される。
+#
+# 当初実装(commit 41fa178)は、jgmenuに表示されていたのが単一の
+# /usr/share/applications/calamares.desktop だという誤った前提に基づいて
+# おり、実際のdpkg-divert後の構成(desktop IDは calamares.desktop.orig
+# であり、calamares.desktop というファイル自体はdivert後は存在しない)と
+# 一致していなかった。本スクリプトはこのズレを修正したものである。
+#
+# 方針:
+# - calamares.desktop.orig (Debian非公式ラッパー相当の入口) は、
+#   Normal Live/Persistence/Installedのいずれでも常に非表示にする。
+#   Live環境でCalamaresを起動する正式な入口は
+#   calamares-install-debian.desktop に一本化する。
+# - calamares-install-debian.desktop (Debian公式ラッパー) は、
+#   Normal Live/Persistenceでは表示し、Installedでのみ非表示にする
+#   (誤って再インストーラーを起動できる状態を避けるため)。
+# - Unknownではどちらも何もしない(fail-closed)。
+#
+# 非表示化の方式は、${HOME}/.local/share/applications/<desktop ID> に
+# Hidden=true を置く、標準的なXDG Desktop Entry仕様のoverride機構を
+# 使う(変更なし)。freedesktop.org Desktop Entry Specificationの
+# "Hidden"キーの説明:「上位ディレクトリ(システムディレクトリ等)に
+# 存在する同一desktop IDのファイルを、そのユーザーにとって『存在しない
+# のと同等』にできる、正式にサポートされた仕組み」であり、Calamares
+# 本体・calamares-settings-debianパッケージへの変更は一切不要。
+# 実機VM検証済み(jgmenu_run apps の出力から該当項目が消えることを確認)。
+#
+# 起動モード判定は既存の mypocketos-boot-mode(1) をそのまま再利用する
+# (Normal Live / Persistence / Installed / Unknown の4状態)。新規の
+# Live/Installed判定ロジックはここでは作らない。
+#
+#              calamares.desktop.orig   calamares-install-debian.desktop
+#   Normal Live: Hidden化する            表示する(overrideがあれば削除)
+#   Persistence: Hidden化する            表示する(overrideがあれば削除)
+#   Installed:   Hidden化する            Hidden化する
+#   Unknown:     何もしない              何もしない
+#
+# 安全設計(41fa178から変更なし):
+# - sudo・root権限は一切使わない。${HOME}配下のみを操作し、
+#   /usr/share/applications配下自体・Calamaresパッケージには一切触れない。
+# - 対象ファイル・対象ディレクトリがシンボリックリンクの場合は、
+#   作成・削除のいずれも行わない(fail-safe)。
+# - MyPocketOS自身が作成したファイルであることを、専用マーカー行
+#   (X-MyPocketOS-Managed=true。freedesktop.org Desktop Entry
+#   Specification "Extending the format" 節が定めるX-PRODUCT形式の
+#   正式なベンダー拡張キー)で識別する。このマーカーを含まないファイル
+#   (利用者自身が作成した可能性がある)は、いずれのdesktop ID・いずれの
+#   起動モードでも上書き・削除しない。
+# - 書き込みは mktemp (同一ディレクトリ) + mv によるatomic置換で行う。
+# - 既に期待する内容と完全に一致する場合は書き込みを行わない(冪等性)。
+# - ${HOME}が未設定・空・ディレクトリでない・シンボリックリンクの場合は
+#   何もしない。
+# - mypocketos-boot-modeの実行に失敗した場合もUnknown同様に何もしない。
+#
+# 使い方:
+#   mypocketos-installer-menu-state       - 本番呼び出し。mypocketos-
+#                                            boot-modeで実際の起動モード
+#                                            を判定する(引数無し)
+#   mypocketos-installer-menu-state MODE  - MODEを起動モードとして直接
+#                                            使う(テスト専用。本番の
+#                                            呼び出し(autostart)では
+#                                            引数を渡さない)
+#
+set -u
+
+MANAGED_MARKER='X-MyPocketOS-Managed=true'
+DESKTOP_ID_ORIG='calamares.desktop.orig'
+DESKTOP_ID_INSTALL_DEBIAN='calamares-install-debian.desktop'
+
+MODE_OVERRIDE="${1:-}"
+
+expected_content() {
+	printf '[Desktop Entry]\nHidden=true\n%s\n' "${MANAGED_MARKER}"
+}
+
+# 対象ファイルが「MyPocketOSが作成・管理しているもの」かどうかを判定する。
+# 通常ファイルであり(シンボリックリンクではない)、かつマーカー行を
+# 含む場合のみ「管理対象」とみなす。判定できない場合は安全側(管理対象
+# ではない)へ倒す。
+is_managed_file() {
+	[ -f "$1" ] || return 1
+	[ -L "$1" ] && return 1
+	grep -qxF "${MANAGED_MARKER}" "$1" 2>/dev/null
+}
+
+# $1 = APPS_DIR配下のdesktop ID (ファイル名)。指定したdesktop IDに対する
+# Hidden overrideを作成する。
+create_hidden_override() {
+	desktop_id="$1"
+	target="${APPS_DIR}/${desktop_id}"
+
+	if [ -e "${target}" ]; then
+		if [ -L "${target}" ]; then
+			# シンボリックリンクには一切触れない。
+			return 0
+		fi
+		if [ -f "${target}" ]; then
+			if [ "$(cat "${target}" 2>/dev/null)" = "$(expected_content)" ]; then
+				# 既に期待どおりの内容 (冪等)。
+				return 0
+			fi
+			if ! is_managed_file "${target}"; then
+				# MyPocketOS管理でない既存ファイル (利用者自身が作成した
+				# 可能性がある) は上書きしない。
+				return 0
+			fi
+			# ここに到達するのは「MyPocketOS管理だが内容が古い」場合のみ。
+			# このまま下の書き込み処理へ進み、atomicに更新する。
+		else
+			# 通常ファイルでもシンボリックリンクでもない (ディレクトリ等)
+			# 想定外の種別には触れない。
+			return 0
+		fi
+	fi
+
+	if [ -e "${APPS_DIR}" ]; then
+		[ -L "${APPS_DIR}" ] && return 0
+		[ -d "${APPS_DIR}" ] || return 0
+	else
+		mkdir -p "${APPS_DIR}" 2>/dev/null || return 0
+	fi
+	[ -w "${APPS_DIR}" ] || return 0
+
+	tmp_file="$(mktemp "${APPS_DIR}/${desktop_id}.XXXXXX" 2>/dev/null)" || return 0
+	if expected_content >"${tmp_file}" 2>/dev/null; then
+		mv -f "${tmp_file}" "${target}" 2>/dev/null || rm -f "${tmp_file}"
+	else
+		rm -f "${tmp_file}"
+	fi
+}
+
+# $1 = APPS_DIR配下のdesktop ID (ファイル名)。MyPocketOS管理のHidden
+# overrideであれば削除する(利用者独自ファイルは削除しない)。
+remove_hidden_override_if_managed() {
+	desktop_id="$1"
+	target="${APPS_DIR}/${desktop_id}"
+
+	[ -e "${target}" ] || return 0
+	is_managed_file "${target}" || return 0
+	rm -f "${target}" 2>/dev/null
+}
+
+# ${HOME}の検証: 未設定・空・シンボリックリンク・ディレクトリでない
+# 場合は何もせず終了する。
+[ -n "${HOME:-}" ] || exit 0
+[ -L "${HOME}" ] && exit 0
+[ -d "${HOME}" ] || exit 0
+
+APPS_DIR="${HOME}/.local/share/applications"
+
+mode="${MODE_OVERRIDE}"
+if [ -z "${mode}" ]; then
+	mode="$(mypocketos-boot-mode 2>/dev/null)" || mode="Unknown"
+	[ -n "${mode}" ] || mode="Unknown"
+fi
+
+case "${mode}" in
+"Normal Live" | Persistence)
+	create_hidden_override "${DESKTOP_ID_ORIG}"
+	remove_hidden_override_if_managed "${DESKTOP_ID_INSTALL_DEBIAN}"
+	;;
+Installed)
+	create_hidden_override "${DESKTOP_ID_ORIG}"
+	create_hidden_override "${DESKTOP_ID_INSTALL_DEBIAN}"
+	;;
+*)
+	: # Unknown、およびその他の想定外の値はどちらのdesktop IDにも
+	  # 何もしない (fail-closed)。
+	;;
+esac
+
+exit 0
