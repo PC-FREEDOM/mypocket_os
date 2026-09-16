@@ -28,17 +28,45 @@
 # /usr/share/applications/calamares.desktop だという誤った前提に基づいて
 # おり、実際のdpkg-divert後の構成(desktop IDは calamares.desktop.orig
 # であり、calamares.desktop というファイル自体はdivert後は存在しない)と
-# 一致していなかった。本スクリプトはこのズレを修正したものである。
+# 一致していなかった。commit 36bcee9でこのズレを2 desktop ID対応へ修正した。
+#
+# 追加背景 (2026-09-16 実機VM確認により判明、36bcee9からの追加修正):
+# 36bcee9をビルドしたISOで実際にNormal Live -> Calamares起動 ->
+# インストール完走 -> Installed起動まで実施したところ、Normal Live/
+# Persistenceでは期待どおり動作した(Install Debianのみ表示)が、
+# Installed環境のjgmenuに「システムをインストール」が1項目だけ残った。
+# 調査の結果、Installed環境では
+#
+#   /usr/share/applications/calamares.desktop
+#
+# が dpkg -S で確認したところ calamares パッケージ本体が提供するファイル
+# として存在していた(Live環境ではcalamares-settings-debianのdpkg-divert
+# によりcalamares.desktop.origへ退避されていたため、この名前のファイルは
+# 通常存在しない)。つまりInstalled環境ではdpkg-divertの効果が及ばず、
+# calamares本体が提供する素の calamares.desktop がそのまま残ってしまう
+# ため、これも別途Hidden化の対象に加える必要がある。
+#
+# 制御対象のCalamares関連desktop IDは以下の3つ:
+#   1. calamares-install-debian.desktop (Debian公式ラッパー入口)
+#   2. calamares.desktop.orig           (Live環境でdpkg-divertされた
+#                                         calamares本体の素のentry)
+#   3. calamares.desktop                (Installed環境でcalamares本体が
+#                                         そのまま提供するentry。Live環境
+#                                         では通常dpkg-divert済みで存在
+#                                         しない可能性が高いが、override
+#                                         を作成しても無害なため全モードで
+#                                         作成してよい)
 #
 # 方針:
-# - calamares.desktop.orig (Debian非公式ラッパー相当の入口) は、
-#   Normal Live/Persistence/Installedのいずれでも常に非表示にする。
-#   Live環境でCalamaresを起動する正式な入口は
-#   calamares-install-debian.desktop に一本化する。
+# - calamares.desktop / calamares.desktop.orig (いずれもDebian非公式
+#   ラッパー相当、または素のpkexec calamares呼び出し) は、Normal Live/
+#   Persistence/Installedのいずれでも常に非表示にする。Live環境で
+#   Calamaresを起動する正式な入口は calamares-install-debian.desktop に
+#   一本化する。
 # - calamares-install-debian.desktop (Debian公式ラッパー) は、
 #   Normal Live/Persistenceでは表示し、Installedでのみ非表示にする
 #   (誤って再インストーラーを起動できる状態を避けるため)。
-# - Unknownではどちらも何もしない(fail-closed)。
+# - Unknownではどれも何もしない(fail-closed)。
 #
 # 非表示化の方式は、${HOME}/.local/share/applications/<desktop ID> に
 # Hidden=true を置く、標準的なXDG Desktop Entry仕様のoverride機構を
@@ -53,11 +81,11 @@
 # (Normal Live / Persistence / Installed / Unknown の4状態)。新規の
 # Live/Installed判定ロジックはここでは作らない。
 #
-#              calamares.desktop.orig   calamares-install-debian.desktop
-#   Normal Live: Hidden化する            表示する(overrideがあれば削除)
-#   Persistence: Hidden化する            表示する(overrideがあれば削除)
-#   Installed:   Hidden化する            Hidden化する
-#   Unknown:     何もしない              何もしない
+#              calamares.desktop  calamares.desktop.orig  calamares-install-debian.desktop
+#   Normal Live: Hidden化する      Hidden化する             表示する(overrideがあれば削除)
+#   Persistence: Hidden化する      Hidden化する             表示する(overrideがあれば削除)
+#   Installed:   Hidden化する      Hidden化する             Hidden化する
+#   Unknown:     何もしない        何もしない               何もしない
 #
 # 安全設計(41fa178から変更なし):
 # - sudo・root権限は一切使わない。${HOME}配下のみを操作し、
@@ -88,6 +116,7 @@
 set -u
 
 MANAGED_MARKER='X-MyPocketOS-Managed=true'
+DESKTOP_ID_PLAIN='calamares.desktop'
 DESKTOP_ID_ORIG='calamares.desktop.orig'
 DESKTOP_ID_INSTALL_DEBIAN='calamares-install-debian.desktop'
 
@@ -180,15 +209,17 @@ fi
 
 case "${mode}" in
 "Normal Live" | Persistence)
+	create_hidden_override "${DESKTOP_ID_PLAIN}"
 	create_hidden_override "${DESKTOP_ID_ORIG}"
 	remove_hidden_override_if_managed "${DESKTOP_ID_INSTALL_DEBIAN}"
 	;;
 Installed)
+	create_hidden_override "${DESKTOP_ID_PLAIN}"
 	create_hidden_override "${DESKTOP_ID_ORIG}"
 	create_hidden_override "${DESKTOP_ID_INSTALL_DEBIAN}"
 	;;
 *)
-	: # Unknown、およびその他の想定外の値はどちらのdesktop IDにも
+	: # Unknown、およびその他の想定外の値はどのdesktop IDにも
 	  # 何もしない (fail-closed)。
 	;;
 esac
