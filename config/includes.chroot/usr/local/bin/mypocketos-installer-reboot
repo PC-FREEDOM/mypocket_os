@@ -1,0 +1,85 @@
+#!/bin/sh
+#
+# mypocketos-installer-reboot - Calamares finished画面で「今すぐ再起動」が
+#                                実行された場合にのみ呼ばれるreboot wrapper。
+#
+# 背景 (2026-09-16、reports/ai-review/20260916-install-media-removal-
+# investigation.md および reports/ai-review/20260916-conditional-
+# live-medium-eject-investigation.md 参照):
+#
+# Debian Live標準(live-tools パッケージ)には、再起動時にインストール
+# メディアの取り外しを案内する仕組み(/usr/bin/live-medium-eject、
+# /usr/lib/systemd/system-shutdown/live-tools.shutdown)が既に存在するが、
+# MyPocketOSは auto/config で `noeject` カーネルパラメータを常時指定して
+# おり(開発時のVM反復再起動テストの利便性のため)、この標準機構は
+# 常に無効化されている。通常のLive再起動(Normal Live/Persistence/
+# 開発用VM)には今後も一切影響を与えたくないため、`noeject`自体は
+# 変更しない。
+#
+# 代わりに、Calamares本体の finished.conf の restartNowCommand を
+# 本scriptへ差し替えることで、「インストールが正常完了し、かつ
+# ユーザーが『今すぐ再起動』を選択した場合」だけを正確に判定する
+# (この判定はCalamares 3.3.14本体のConfig::doRestart()/
+# onInstallationFailed()が既に行っており、本scriptやMyPocketOS側で
+# 独自の成功判定ロジックを実装する必要はない。詳細は
+# config/includes.chroot/etc/calamares/modules/finished.conf のコメント
+# 参照)。
+#
+# 本scriptは、そのタイミングでだけ作成されるvolatileなmarker
+# (/run/mypocketos/install-complete-reboot)を作成した上で、従来どおり
+# systemctl -i reboot を実行するだけの薄いwrapperである。実際のメディア
+# 取り外し案内/eject処理は、このmarkerの有無だけで分岐する別の新規
+# systemd system-shutdown hook
+# (/usr/lib/systemd/system-shutdown/mypocketos-install-media-removal)
+# が担う。
+#
+# marker作成の安全設計:
+# - marker配置場所は /run 配下(tmpfs、volatile)とし、/home・/etc・
+#   /var/lib等の永続化されうる場所には一切置かない。/run はPersistence
+#   の永続化対象に含まれないことを確認済み(config/includes.chroot/
+#   usr/local/bin/mypocketos-persistence-setup が参照する範囲に /run
+#   自体は含まれない)。再起動のたびにtmpfsとして必ず空の状態から
+#   再構築されるため、明示的な削除処理をここに書く必要はない。
+# - marker用ディレクトリ・ファイルがシンボリックリンクの場合は書き込みを
+#   行わない(symlink攻撃対策)。
+# - 書き込みは mktemp (同一ディレクトリ) + mv によるatomic置換で行う
+#   (本リポジトリの既存の安全実装方針を踏襲。過剰な冪等性チェック等は
+#   行わない — 起動のたびに必ず新規のtmpfsへ書くだけなので不要)。
+# - marker作成が何らかの理由(/runの異常等)で失敗しても、それによって
+#   ユーザーが選択した「再起動」という主目的の操作を止めてはならない
+#   (fail-open)。marker作成の成否に関わらず、最後は必ず
+#   systemctl -i reboot を実行する。
+#
+# 本scriptはCalamaresから起動され、Calamares自体が
+# calamares-install-debian(pkexec calamares)経由でroot権限のまま
+# 動作しているプロセスの子として実行されるため、/run配下への書き込みに
+# 権限上の問題はない。
+#
+# 本scriptはLive専用であり、shellprocess-livepurge.conf により
+# Installed環境からは削除される(dpkgパッケージに属さないファイルの
+# ため、apt-get purgeでは自動的に削除されない。明示的なrm -fが必要)。
+#
+# テスト容易性のため、marker用ディレクトリのパスのみ環境変数
+# MYPOCKETOS_INSTALL_MARKER_DIR で上書き可能にしている(未設定時は
+# 本番と同じ /run/mypocketos を使う。Calamaresからの実際の呼び出しでは
+# この環境変数を設定しないため、本番動作は変更されない)。これにより、
+# テストがroot権限無しで、かつ実システムの /run に副作用を与えずに
+# 動作検証できる。
+#
+set -u
+
+MARKER_DIR="${MYPOCKETOS_INSTALL_MARKER_DIR:-/run/mypocketos}"
+MARKER_FILE="${MARKER_DIR}/install-complete-reboot"
+
+if [ ! -e "${MARKER_DIR}" ]; then
+	mkdir -p "${MARKER_DIR}" 2>/dev/null
+fi
+
+if [ -d "${MARKER_DIR}" ] && [ ! -L "${MARKER_DIR}" ] && [ ! -L "${MARKER_FILE}" ]; then
+	tmp_file="$(mktemp "${MARKER_DIR}/.install-complete-reboot.XXXXXX" 2>/dev/null)" || tmp_file=""
+	if [ -n "${tmp_file}" ]; then
+		mv -f "${tmp_file}" "${MARKER_FILE}" 2>/dev/null || rm -f "${tmp_file}" 2>/dev/null
+	fi
+fi
+
+exec systemctl -i reboot
