@@ -188,5 +188,18 @@ VIRT_INSTALL_LINE="$(grep -n '^virt-install ' "${PROD_SCRIPT}" | head -n1 | cut 
 check "ISO_SRC existence check precedes virt-install invocation" \
 	test "${ISO_CHECK_LINE}" -lt "${VIRT_INSTALL_LINE}"
 
+# ==============================================================================
+# 静的な構造確認: 仮想ディスク(vda)がCD-ROMより先にboot.order=1で
+# 優先起動されること (2026-09-16、reports/ai-review/
+# 20260916-test-vm-boot-order-fix.md 参照。インストール後もISOが
+# libvirt側に残ったままInstalled systemへ到達できるようにするため)。
+# ==============================================================================
+check "primary disk (vda, bus=virtio) has boot.order=1" \
+	grep -qF 'path=${DISK_PATH},size=${DISK_SIZE_GIB},format=qcow2,bus=virtio,boot.order=1' "${PROD_SCRIPT}"
+check "CD-ROM (Live ISO) has boot.order=2 (falls back only when vda has no OS yet)" \
+	grep -qF 'device=cdrom,path=${ISO_DEST},boot.order=2' "${PROD_SCRIPT}"
+check "no stray boot.order=3 (no persistence scratch disk exists in this script yet)" \
+	sh -c '! grep -q "boot.order=3" "$1"' _ "${PROD_SCRIPT}"
+
 echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"
 [ "${FAIL}" -eq 0 ]
