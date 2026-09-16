@@ -67,6 +67,16 @@
 # (QEMU/KVM等の仮想CD/DVDでも同様。完全自動化(eject成功時は案内を
 # 抑制する等)はv1.1として別途検討する)。
 #
+# 案内文について (2026-09-17、reports/ai-review/20260917-installer-
+# removal-prompt-ascii-fix.md 参照): 当初は日本語案内文を使用していたが、
+# 実機VMで実際にshutdown最終段階のLinux consoleに表示したところ、
+# 日本語部分が「♦」等に文字化けすることを確認した(英数字の
+# "MyPocketOS"・"Enter"等は正常表示された)。この段階のconsoleには
+# CJKフォントが読み込まれていないためと判断し、日本語consoleフォントの
+# 追加は行わず(shutdown最終段階のみの短時間表示のためだけに恒久的な
+# 依存を増やしたくない、BIOS/UEFI/VM/実機を問わず安定表示を優先する、
+# という判断)、案内文をASCII英語のみに変更した。
+#
 # テスト容易性のため、marker file・console deviceのパスを環境変数
 # (MYPOCKETOS_INSTALL_MARKER_FILE、MYPOCKETOS_INSTALL_CONSOLE)で
 # 上書き可能にしている(未設定時は本番と同じ /run/mypocketos/
@@ -133,10 +143,10 @@ if [ -z "${_IS_USB}" ]; then
 fi
 
 _MSG='
-MyPocketOS のインストールが完了しました。
+MyPocketOS installation is complete.
 
-インストールメディアを取り外してください。
-取り外したら Enter キーを押してください。'
+Please remove the installation media.
+Then press Enter to continue.'
 
 if [ -x /bin/plymouth ] && plymouth --ping 2>/dev/null; then
 	plymouth message --text="${_MSG}" 2>/dev/null

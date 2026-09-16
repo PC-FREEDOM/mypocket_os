@@ -185,6 +185,22 @@ check "shutdown hook syntax is valid (sh -n)" sh -n "${SHUTDOWN_HOOK}"
 check "shutdown hook checks for the 'reboot' argument before doing anything else" \
 	grep -q '"${1:-}" = "reboot"' "${SHUTDOWN_HOOK}"
 
+# 2026-09-17: 実機VMのshutdown最終段階consoleでは日本語が「◆」等に
+# 文字化けすることを確認したため、案内文をASCII英語のみへ変更した
+# (reports/ai-review/20260917-installer-removal-prompt-ascii-fix.md
+# 参照)。production source上の _MSG リテラルそのものが、日本語・
+# 全角文字を一切含まないASCIIのみであることを静的に確認する
+# (デバイス検出等のロジックには依存しないため、実行環境の有無に
+# 関わらず必ず実行される)。
+# コメント行(日本語での説明を含む、変更していない)を除いた実コード
+# 部分に非ASCII文字が一切無いことを確認する。案内文(_MSG)は実コード側の
+# 唯一の自然文字列であるため、これは実質的に案内文がASCII英語のみで
+# あることの確認になる。
+check "production script's non-comment lines (i.e. the runtime _MSG string) are ASCII-only" \
+	sh -c '! grep -v "^[[:space:]]*#" "$1" | LC_ALL=C grep -qP "[^\x00-\x7F]"' _ "${SHUTDOWN_HOOK}"
+check "production message literal contains the expected English text" \
+	grep -qF 'MyPocketOS installation is complete.' "${SHUTDOWN_HOOK}"
+
 # E. markerが無ければ何もしない
 e_marker_file="${TMPDIR}/no-such-marker/install-complete-reboot"
 e_console="${TMPDIR}/console-e.txt"
@@ -244,6 +260,14 @@ if [ -n "${REAL_SD_DEVICE}" ]; then
 		"${SHUTDOWN_HOOK}" reboot
 	check "shutdown hook with reboot+marker+resolvable device: writes a console message" \
 		sh -c '[ -s "$1" ]' _ "${g_console}"
+	check "console message contains the expected ASCII English text" \
+		grep -qF 'MyPocketOS installation is complete.' "${g_console}"
+	check "console message asks to remove the installation media (ASCII English)" \
+		grep -qF 'Please remove the installation media.' "${g_console}"
+	check "console message asks to press Enter (ASCII English)" \
+		grep -qF 'Then press Enter to continue.' "${g_console}"
+	check "console message contains no non-ASCII characters (mojibake fix)" \
+		sh -c 'LC_ALL=C grep -qP "[^\\x00-\\x7F]" "$1" && exit 1 || exit 0' _ "${g_console}"
 
 	# H. USB判定時にejectを呼ばない (案内メッセージは表示する。
 	#    Debian標準live-medium-ejectとの意図的な差異。script内コメント参照)
