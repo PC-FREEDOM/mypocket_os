@@ -8,7 +8,7 @@ set -eu
 DIR="$(cd "$(dirname "$0")" && pwd)"
 status=0
 
-for t in test_boot_mode.sh test_menu.sh test_icon_theme.sh test_fluent_archive.sh test_battery.sh test_touchpad.sh test_conky_display.sh test_conky_network_restart.sh test_touchpad_settings.sh; do
+for t in test_boot_mode.sh test_menu.sh test_icon_theme.sh test_fluent_archive.sh test_battery.sh test_touchpad.sh test_conky_display.sh test_conky_network_restart.sh test_touchpad_settings.sh test_fcitx5_profile.sh test_calamares_esp_size.sh test_calamares_install_requirements.sh test_installer_menu_state.sh test_installer_media_removal.sh; do
 	echo "=== ${t} ==="
 	if ! "${DIR}/${t}"; then
 		status=1

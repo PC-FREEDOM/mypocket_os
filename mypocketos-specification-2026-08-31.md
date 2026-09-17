@@ -96,7 +96,7 @@ MyPocketOSはDebian StableとOpenboxを基盤にした軽量ポータブルLinux
 | ロケール | `ja_JP.UTF-8` | 実装済み |
 | タイムゾーン | `Asia/Tokyo` | 実装済み |
 | キーボード | 日本語配列 | 実装済み |
-| 日本語入力 | IBus＋Mozc | 実装済み |
+| 日本語入力 | Fcitx5＋Mozc | 実装済み |
 | 最小USB容量 | 16GB | 暫定確定 |
 | 推奨USB容量 | 32GB以上 | 推奨値 |
 | 内蔵インストール容量 | 8GB以上 | 暫定推奨 |
@@ -397,9 +397,21 @@ Normal LiveとPersistenceは明示的に分離する。
 
 - `Normal Live`
 - `Persistence`
+- `Installed`（2026-09-14追加、Calamares installed system対応）
 - `Unknown`
 
-`/proc/cmdline`を完全一致トークンで判定し、曖昧・重複・不明は`Unknown`へ倒す。
+`Normal Live`／`Persistence`は`/proc/cmdline`を完全一致トークンで判定する。
+`Installed`は、`/proc/cmdline`にLive関連トークン(`persistence`／
+`nopersistence`／`boot=live`)がいずれも無く、かつroot filesystemの種別が
+`overlay`／`aufs`(live-boot典型のroot構成)ではなく、かつlive-bootの
+メディアマウント先(既定`/run/live/medium`)が存在しない、という3条件を
+すべて満たした場合にのみ判定する。個別のデバイス名・パーティション名・
+ファイルシステム種別(`/dev/vda2`・`ext4`等)は固定条件にしない。
+
+いずれの状態も、判定材料が読み取れない・矛盾する場合は`Unknown`へ倒す
+(fail-closed)。2026-09-14、BIOS/UEFI双方のVM(Calamaresインストール後の
+installed system)で`Installed`表示を実地確認済み(詳細は
+`reports/ai-review/20260913-calamares-spike-desktop-fixes.md`参照)。
 
 ## 7.3 ブランド表示の残課題(対応済み)
 
@@ -782,6 +794,95 @@ list-props`によるlibinputプロパティの直接確認は未実施であり�
 Calamaresは将来候補。
 
 通常インストールを公開機能として明記する場合、リリース前に最終E2Eを実施する。
+
+## 10.1 Calamares検証結果 (2026-09、feasibility spike)
+
+`feat/calamares-install-spike` branchでの検証により、Calamares(現行
+バージョン3.3.14、Debian 13 trixie収録版)を用いた通常インストールの
+技術的な実現可能性を確認した。以下は本検証で確定した技術仕様であり、
+通常インストール自体を初回公開版へ含めるかどうかの判断(上記のとおり
+現時点ではPhase 3の将来候補のまま、18節参照)とは独立して記録する。
+
+### 10.1.1 自動パーティション方針
+
+UEFI:
+- GPT
+- EFI System Partition 512MiB、FAT32、`/boot/efi`
+- root ext4(残り全て)
+- swapなし
+- `/home`分離なし
+
+Legacy BIOS:
+- MSDOS／MBR
+- root ext4(残り全て)、boot flag
+- GRUBブートローダーをディスク本体へインストール
+- swapなし
+- `/home`分離なし
+
+BIOS + GPT:
+- 自動インストールの標準構成にはしない
+- 手動パーティションでのみ対応(BIOS Boot Partitionを人間が明示的に作成)
+- 2026-09、BIOS VMでGPT + 約8MiB BIOS Boot Partition + root ext4に
+  よる手動インストール成功実績あり
+
+### 10.1.2 方針決定の理由
+
+Calamares 3.3.14は、`defaultPartitionTableType`が未設定の場合、firmwareに
+応じてGPT(EFI)／MSDOS(BIOS)を自動選択する(Calamares公式ソースコード
+`src/modules/partition/core/PartitionActions.cpp`で確認済み)。BIOS環境で
+`defaultPartitionTableType: gpt`を設定してGPTを強制しても、Calamares
+3.3.14の自動パーティション機能にはBIOS Boot Partitionを自動生成する
+仕組みが存在しないため(同ソースで確認済み)、GRUBインストールまたは
+起動に失敗するリスクがある。この機能(`createHybridBootloaderLayout`)は
+Calamares本体のより新しいバージョン(2025-03マージ)で追加されたが、
+MyPocketOSが使う3.3.14(2025-02リリース)には含まれていない
+(`reports/ai-review/20260914-calamares-bios-auto-partition-investigation.md`
+参照)。
+
+そのため、初回公開版でCalamaresによる通常インストールを提供する場合は、
+「UEFIはGPT」「Legacy BIOSはMSDOS」というCalamares 3.3.14の標準挙動を
+そのまま受け入れる方針とする。これはバグ回避ではなく、現行バージョンで
+最も安全な標準構成としての採用である。
+
+### 10.1.3 ESP 512MiB採用理由
+
+現行のGRUB + shim構成ではESP 300MiB(Calamares/Debian既定)でも動作するが、
+以下を踏まえ標準ESPサイズを512MiBとする。
+
+- 将来的な別ブートローダー(Limine等)採用の可能性
+- UKI(Unified Kernel Image)やリカバリ用EFIバイナリ等、将来のESP内資産
+  拡張の余地
+- 最小16GB想定のディスクでは300→512MiBの差(約212MiB)は許容できる
+- ESPは後から拡張するより最初から余裕を持たせる方が安全
+
+2026-09、UEFI VMでCalamares「ディスクの消去」自動インストール時にESPが
+512MiB・FAT32として作成されること、`/boot/efi`へ正常にマウントされる
+こと(`lsblk`で`/dev/vda1 512M vfat /boot/efi`を確認)、BIOS環境へは
+誤適用されない(BIOS自動レイアウトにESPは作成されない)ことを確認済み。
+
+### 10.1.4 Secure Boot (installed system側)
+
+QEMU/OVMF VM環境では、Secure Boot enabled状態(`mokutil --sb-state`で
+確認)のままCalamaresでインストールしたMyPocketOS installed systemの
+UEFI起動・desktop到達・日本語入力までを確認済み。**ただし実機での
+Secure Boot動作は未確認であり、「Secure Boot完全対応済み」とは言えない。**
+3節の既存記載(Live USB自体のSecure Boot対応、要検証)とは別の確認結果
+として、installed system側の状況をここに独立して記録する。
+
+### 10.1.5 Calamaresバージョンと将来の再検討事項
+
+現行検証はCalamares 3.3.14(Debian 13 trixie収録版)を対象とする。自動
+パーティションはfirmwareに応じたCalamares標準動作(UEFI→GPT、BIOS→
+MSDOS/MBR)をそのまま利用する。将来的に以下を再検討する。
+
+- Calamaresのバージョンアップ
+- BIOS + GPTの自動レイアウト化
+- `createHybridBootloaderLayout`等の新機能の利用可否
+- firmwareごとに最小構成を自動生成できる仕組み
+- Limine等を含むbootloader設計
+
+今回のbranch(`feat/calamares-install-spike`)では、上記将来検討事項の
+実装は行わない。
 
 ---
 

@@ -1,0 +1,164 @@
+#!/bin/sh
+#
+# mypocketos-install-media-removal - Calamaresインストール完了直後の
+#   再起動時にだけ、インストールメディアの取り外し案内/eject試行を行う
+#   systemd system-shutdown hook。
+#
+# 背景 (2026-09-16、reports/ai-review/20260916-install-media-removal-
+# investigation.md および reports/ai-review/20260916-conditional-
+# live-medium-eject-investigation.md 参照):
+#
+# systemd-shutdown(8) は、実際のpoweroff/halt/reboot/kexec直前に
+# /usr/lib/systemd/system-shutdown/ 配下の実行ファイルを、
+# "poweroff"/"halt"/"reboot"/"kexec" のいずれかを唯一の引数として
+# 並列実行する。全サービス停止後・大半のマウント解除後(ただしrootfs・
+# /run・APIファイルシステムはまだ残っている)という、安全にメディア
+# 取り外し案内を出せる公式な最終段階である。
+#
+# Debian Live標準(live-tools パッケージ)には、同じ場所に
+# /usr/lib/systemd/system-shutdown/live-tools.shutdown
+# (実体は /usr/bin/live-medium-eject) が既に存在するが、これは
+# /proc/cmdline に "noeject" が含まれると即座に何もせず終了する実装で
+# あり、判定は設定ファイルより前に行われるため、設定ファイル経由で
+# 「今回だけ」有効化する公式な方法は存在しない(1章参照相当、
+# ソースレベルで確認済み。live-medium-eject全文は
+# chroot/usr/bin/live-medium-eject で確認できる)。MyPocketOSは
+# `noeject` を通常のLive再起動(Normal Live/Persistence/開発用VM)向けに
+# 常時維持する方針のため、本scriptは live-medium-eject / noeject には
+# 一切触れず、完全に独立したhookとして追加する。
+#
+# 本scriptは、/usr/local/bin/mypocketos-installer-reboot が
+# Calamaresの「インストール成功 + 今すぐ再起動」実行時にのみ作成する
+# volatile marker (/run/mypocketos/install-complete-reboot) の有無だけで
+# 動作を分岐する。marker が無い通常のLive再起動では、本scriptは即座に
+# 何もせず終了するため、既存のLive再起動体験には一切影響しない。
+#
+# 対象アクションは reboot のみに限定する(poweroff/halt/kexecでは
+# markerがあっても何もしない)。インストール直後のUXとして意味があるのは
+# 「再起動してInstalled systemを起動する」場合のみであり、電源オフ等では
+# メディア取り外し案内を出す必要がない。
+#
+# デバイス特定・USB/CD-DVD判定・eject試行のロジックは、Debian標準の
+# /usr/bin/live-medium-eject の実装(chroot/usr/bin/live-medium-eject、
+# live-tools パッケージ)を参考に、必要な核心部分のみ最小限で
+# 再実装したものである(/proc/cmdline偽装・Debianパッケージファイルの
+# 直接patch・live-medium-eject全文コピーはいずれも行っていない)。
+# systemd >= 253 でLiveメディアのマウントポイントが
+# /run/shutdown/mounts/<hash> へ動的に付け替えられる場合の代替検出も
+# live-medium-ejectと同様に実装している。
+#
+# 重要な相違点(Debian標準のlive-medium-ejectとの意図的な差異):
+# live-medium-ejectは、デバイスがUSBマスストレージ(sd*かつ
+# /sys/block/<dev>がusbサブシステム配下)と判定した場合、案内メッセージを
+# 一切表示せずスクリプト全体を即座に終了する(「ソフトウェアeject自体を
+# 危険とみなし何もしない」という設計。コメント:
+# "ignoring usb mass storage devices (they need coldreboot to recover)"、
+# 全文確認済み)。しかし本scriptが動作するのは「Calamaresインストールが
+# 今まさに完了し、Installed systemへ切り替えるための再起動」という
+# 限定的な場面であり、この場面でUSBメディアを何も案内せず放置すると、
+# 単にLiveメディアからもう一度起動してしまい、Installed systemへ
+# 到達できない。そのため本scriptでは、USBの場合もソフトウェアeject自体は
+# 行わない(live-medium-ejectと同じ安全判断)が、取り外し案内メッセージと
+# Enter入力待ちは行う(v1仕様として意図的にUSBでもCD/DVDと同じ案内を
+# 出す。live-medium-ejectのUSB時の挙動をそのまま踏襲していない、
+# MyPocketOS独自の設計判断)。
+#
+# v1の範囲: USB/CD-DVDを問わず、常に案内メッセージ+Enter入力待ちを行う
+# (QEMU/KVM等の仮想CD/DVDでも同様。完全自動化(eject成功時は案内を
+# 抑制する等)はv1.1として別途検討する)。
+#
+# 案内文について (2026-09-17、reports/ai-review/20260917-installer-
+# removal-prompt-ascii-fix.md 参照): 当初は日本語案内文を使用していたが、
+# 実機VMで実際にshutdown最終段階のLinux consoleに表示したところ、
+# 日本語部分が「♦」等に文字化けすることを確認した(英数字の
+# "MyPocketOS"・"Enter"等は正常表示された)。この段階のconsoleには
+# CJKフォントが読み込まれていないためと判断し、日本語consoleフォントの
+# 追加は行わず(shutdown最終段階のみの短時間表示のためだけに恒久的な
+# 依存を増やしたくない、BIOS/UEFI/VM/実機を問わず安定表示を優先する、
+# という判断)、案内文をASCII英語のみに変更した。
+#
+# テスト容易性のため、marker file・console deviceのパスを環境変数
+# (MYPOCKETOS_INSTALL_MARKER_FILE、MYPOCKETOS_INSTALL_CONSOLE)で
+# 上書き可能にしている(未設定時は本番と同じ /run/mypocketos/
+# install-complete-reboot、/dev/console を使う。systemd-shutdownからの
+# 実際の呼び出しではこれらの環境変数は設定されないため、本番動作は
+# 変更されない)。
+#
+set -u
+
+# reboot以外(poweroff/halt/kexec)では何もしない。
+[ "${1:-}" = "reboot" ] || exit 0
+
+MARKER_FILE="${MYPOCKETOS_INSTALL_MARKER_FILE:-/run/mypocketos/install-complete-reboot}"
+
+# markerが無い、またはsymlinkの場合は何もしない
+# (Calamaresインストール完了直後の再起動ではない、または不正な状態)。
+if [ ! -e "${MARKER_FILE}" ] || [ -L "${MARKER_FILE}" ]; then
+	exit 0
+fi
+
+CONSOLE_DEVICE="${MYPOCKETOS_INSTALL_CONSOLE:-/dev/console}"
+
+# デバイス特定 (Debian live-tools の live-medium-eject と同じ方法)。
+_DEVICE="$(findmnt -Un -o source /run/live/medium 2>/dev/null | sed -e 's|^/dev/||')"
+
+# systemd >= 253 では、シャットダウン処理中にLiveメディアの
+# マウントポイントが /run/shutdown/mounts/<hash> へ動的に付け替え
+# られる場合があるため、その場合はそちらから再検出する
+# (live-medium-ejectと同じ対応)。
+if [ -z "${_DEVICE}" ]; then
+	_shutdown_mnt="$(df --output=target 2>/dev/null | grep -Ew '^/run/shutdown/mounts' | head -n1)"
+	if [ -n "${_shutdown_mnt}" ]; then
+		_DEVICE="$(findmnt -Un -o source "${_shutdown_mnt}" 2>/dev/null | sed -e 's|^/dev/||')"
+	fi
+fi
+
+# デバイスを特定できない場合は、安全に何もせず終了する
+# (reboot自体を止めない)。
+[ -n "${_DEVICE}" ] || exit 0
+[ -b "/dev/${_DEVICE}" ] || exit 0
+
+# USB マスストレージかどうかの判定 (live-medium-ejectと同じ方法:
+# sd* パターンかつ /sys/block/<disk> のリンク先が usb サブシステム配下)。
+_IS_USB=""
+case "${_DEVICE}" in
+	sd*)
+		_base_device="$(echo "${_DEVICE}" | sed -e 's/[0-9]*$//')"
+		if readlink "/sys/block/${_base_device}" 2>/dev/null | grep -q usb; then
+			_IS_USB=1
+		fi
+		;;
+esac
+
+# USB以外 (CD/DVD等) の場合のみ、eject試行を行う。eject失敗は
+# reboot全体を止めない (バックグラウンド実行、出力・終了コードは
+# 握りつぶす。live-medium-ejectと同じ方針)。
+WAIT_EJECT=""
+if [ -z "${_IS_USB}" ]; then
+	_eject_bin="$(command -v eject 2>/dev/null)" || _eject_bin=""
+	if [ -n "${_eject_bin}" ]; then
+		( sleep 1; eject -p -m "/dev/${_DEVICE}" ) >/dev/null 2>&1 &
+		WAIT_EJECT=1
+	fi
+fi
+
+_MSG='
+MyPocketOS installation is complete.
+
+Please remove the installation media.
+Then press Enter to continue.'
+
+if [ -x /bin/plymouth ] && plymouth --ping 2>/dev/null; then
+	plymouth message --text="${_MSG}" 2>/dev/null
+	plymouth watch-keystroke >/dev/null 2>&1
+else
+	stty sane < "${CONSOLE_DEVICE}" 2>/dev/null
+	printf '%s\n' "${_MSG}" > "${CONSOLE_DEVICE}" 2>/dev/null
+	read -r _ans < "${CONSOLE_DEVICE}" 2>/dev/null
+fi
+
+if [ -n "${WAIT_EJECT}" ]; then
+	wait
+fi
+
+exit 0

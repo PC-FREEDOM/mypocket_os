@@ -294,8 +294,15 @@ VIRT_INSTALL_ARGS=(
     --vcpus "${VM_VCPUS}"
     --cpu host-passthrough
     --os-variant debian13
-    --disk "path=${DISK_PATH},size=${DISK_SIZE_GIB},format=qcow2,bus=virtio,boot.order=2"
-    --disk "device=cdrom,path=${ISO_DEST},boot.order=1"
+    # 仮想ディスク(vda)をboot.order=1、CD-ROMをboot.order=2とする。
+    # 新規VM作成直後はvdaが空/未インストールのためCD-ROM(Live ISO)へ
+    # 自動的にフォールバックし、Calamaresでのインストール後はvdaが
+    # 優先起動されるため、ISOがlibvirt側に残ったままでもInstalled
+    # systemへ到達できる(2026-09-16、CD-ROM=1/vda=2の従来順序では、
+    # ゲスト側からのeject後もISO再起動が優先されてしまうことを実機VMで
+    # 確認、reports/ai-review/20260916-test-vm-boot-order-fix.md参照)。
+    --disk "path=${DISK_PATH},size=${DISK_SIZE_GIB},format=qcow2,bus=virtio,boot.order=1"
+    --disk "device=cdrom,path=${ISO_DEST},boot.order=2"
     "${BOOT_ARGS[@]}"
     --network "network=${LIBVIRT_NETWORK},model=virtio"
     --graphics spice,listen=127.0.0.1,clipboard.copypaste=yes
