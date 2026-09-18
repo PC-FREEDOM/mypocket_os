@@ -325,6 +325,49 @@ Installed system起動のいずれも正常に完了しており、**現時点�
 おらず**未確認**。原因調査・対応は本reportのスコープ外とし、今後の
 課題として記録するに留める。
 
+## 10.5 設計判断の背景(2026-09-18追記、`20260916-installer-media-removal-v1-implementation.md`・`20260916-test-vm-boot-order-fix.md`より吸収)
+
+`20260918-ai-review-report-cleanup-audit.md`の指摘に基づき、本機能の
+前提となった2つのレポート(いずれもMERGE対象、統合後に削除可能)から、
+本レポートに引き継がれていなかった設計根拠を吸収する。
+
+**marker/shutdown hookの設計判断**:
+
+- marker(`/run/mypocketos/install-complete-reboot`)はtmpfs上に置き、
+  `/home`・`/etc`・`/var/lib`等Persistenceの永続化対象範囲には一切
+  含めない(`mypocketos-persistence-setup`が参照する範囲に`/run`は
+  含まれないことを実装前に確認済み)。
+- marker作成の成否に関わらず、wrapper(`mypocketos-installer-reboot`)は
+  必ず`exec systemctl -i reboot`まで到達する設計(fail-open)。marker用
+  ディレクトリ・ファイルがシンボリックリンクだった場合は書き込みを
+  行わないsymlink攻撃対策も実装している。
+- shutdown hook側は`reboot`以外のアクション(poweroff/halt/kexec)では
+  即終了するreboot-only guardを持つ。
+- **USB判定でDebian標準(`live-medium-eject`)から意図的に乖離した点**:
+  Debian標準はUSBマスストレージの場合、案内メッセージすら一切表示せず
+  即終了する。本実装はこの場面(Calamaresインストール完了直後の再起動)
+  に限り、USBの場合もソフトウェアeject自体は行わない(Debian標準と
+  同じ安全判断)が、取り外し案内メッセージ+Enter待ちは行う。理由:
+  何も案内せず放置すると単にLiveメディアから再起動してしまい、目的の
+  Installed system起動に到達できないため。
+- この一連の設計(marker仕様・wrapper仕様・shutdown hook仕様・USB判定の
+  意図的乖離)は、現在の該当production codeのヘッダーコメントに
+  自己文書化済みであり、本レポートでは要点のみを引き継ぐ。
+
+**VM boot order変更の実機VM検証時系列**:
+
+- 変更前: CD-ROM(Live ISO)=boot.order 1、vda(仮想ディスク)=boot.order 2。
+  この構成では、Calamaresインストール完了後にゲスト側から`eject`を
+  試みてもlibvirt側のISO割り当て自体は残るため、再起動のたびにCD-ROMが
+  優先されLive ISOが再び起動してしまっていた。
+- 人間が一時的にvda=1/CD-ROM=2へ変更して起動したところ、ISOが差さった
+  ままでもInstalled systemが正常に優先起動することを確認し、
+  `scripts/create-test-vm.sh`が新規作成するVM定義の正式なboot orderを
+  この構成(vda=1、CD-ROM=2)へ変更した。
+- この変更は10.3節「QEMU/KVMのejectについて」で確認した「ejectは
+  完全なISO detachではなく、boot order変更による優先度制御でInstalled
+  systemを起動させている」という整理の直接の前提になっている。
+
 ## 11. 依然として未確認のもの
 
 UEFI VM(10.1節)・BIOS VM(10.2節)・物理USB実機(10.4節)の実地確認
