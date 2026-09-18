@@ -755,8 +755,9 @@ Base／Standard VM確認済み。
 - `TappingDrag "on"`(タップ&ドラッグ)
 - `ScrollMethod "twofinger"`(2本指スクロール)
 - `NaturalScrolling "on"`(2026-09-10追加。指を下へ動かすと表示内容も
-  下へ動く向き。詳細はREADME「タッチパッド 2本指スクロール方向
-  (2026-09-10)」節参照)
+  下へ動く向き。指を下へ→表示内容も下へ動くこと、USBマウスのホイール
+  方向に副作用が無いことは2026-09-11に実機E2E確認済み。詳細はREADME
+  「タッチパッド 2本指スクロール方向 (2026-09-10)」節参照)
 
 ファイル名`51-`は、`xserver-xorg-input-libinput`パッケージ提供の既定
 `40-libinput.conf`より後に読み込まれるようにするため。新規パッケージ
@@ -775,12 +776,75 @@ Base／Standard VM確認済み。
 右クリック・ホイールスクロールも正常であり、`MatchIsTouchpad "on"`
 による明らかなマウス側の副作用は確認されなかった。
 
-ただし、`xinput`コマンドがMyPocketOSに未搭載のため`xinput
-list-props`によるlibinputプロパティの直接確認は未実施であり、実機での
-操作確認と`/proc/bus/input/devices`によるカーネル側認識確認によって
-評価した。トラックポイント搭載機・Bluetoothマウスでの確認は引き続き
+2026-09-06時点では`xinput`コマンドがMyPocketOSに未搭載だったため
+`xinput list-props`によるlibinputプロパティの直接確認は未実施であり、
+実機での操作確認と`/proc/bus/input/devices`によるカーネル側認識確認に
+よって評価した(その後2026-09-12、9.4節のタッチパッド設定GUIの実装に
+伴い`xinput`パッケージを追加済みだが、この直接確認自体はまだ実施して
+いない)。トラックポイント搭載機・Bluetoothマウスでの確認は引き続き
 未実施のまま残っている(詳細はREADME「タッチパッド 実機E2E検証
 (2026-09-06)」節参照。16.2節参照)。
+
+## 9.4 タッチパッド設定GUI (2026-09-12)
+
+`/usr/local/bin/mypocketos-touchpad-settings`(単一スクリプト、yad
+ベース)により、9.3節の既定動作をGUIから変更できる。9.3節の
+`51-mypocketos-touchpad.conf`(Xorg起動時の既定値)自体は本機能では
+変更しない。
+
+**設定項目とXInputプロパティへの対応**:
+
+| 設定項目 | XInputプロパティ | 値 |
+|---|---|---|
+| タップ | `libinput Tapping Enabled` | ON=1 / OFF=0 |
+| スクロール方向 | `libinput Natural Scrolling Enabled` | 指の動きと同じ方向=1 / 反対方向=0 |
+| 2本指スクロール | `libinput Scroll Method Enabled` | ON: `1 0 0` / OFF: `0 0 0` |
+| ポインタ速度(5段階) | `libinput Accel Speed` | -0.8/-0.4/0.0/0.4/0.8 |
+
+**起動方法**: jgmenuの「設定」カテゴリ配下(`.desktop`ファイルの
+`Categories=Settings;DesktopSettings;`により、jgmenu-apps内蔵schemaで
+自動分類)、またはターミナルから直接実行。
+
+**設定の保存・適用**:
+- 設定ファイル: `~/.config/mypocketos/touchpad.conf`(`KEY=VALUE`形式、
+  `mktemp`+`mv -f`によるatomic書き込み。`.`/`source`による読み込みは
+  行わない)。
+- Openbox autostartで`mypocketos-touchpad-settings --apply`を実行し、
+  ログイン(再ログイン含む)のたびに保存済み設定(無ければMyPocketOS
+  既定値)を検出済み全タッチパッドへ無言で再適用する。
+- 検出は`xinput list-props`の出力に`libinput Tapping Enabled`が
+  含まれるかで判定し、デバイス名・vendor ID等のハードコードは行わない。
+  複数タッチパッドが存在する場合は全台に同時適用する(USBマウス・
+  トラックポイントには適用しない)。
+
+**GUIボタンの挙動**:
+- 「適用」: 保存+即時反映。GUIは閉じずに継続表示する(値を試しながら
+  繰り返し調整できる)。
+- 「OK」: 保存+即時反映のうえGUIを閉じる。
+- 「既定値に戻す」: 設定ファイルを削除し、MyPocketOSの既定値
+  (タップ/2本指スクロール/指の動きと同じ方向=ON、標準速度)を
+  その場で再適用する。GUIは閉じない。
+- ウィンドウを閉じる/Escape: その時点で未適用の変更は保存・反映しない。
+
+**Persistence**: `~/.config/mypocketos/touchpad.conf`は`/home`
+Persistenceの対象範囲内にあり、Persistence環境で変更した設定が
+再起動後も保持されることを実機確認済み(2026-09-12)。
+
+**実機確認済み事項 (2026-09-12、PR #45、4commit)**: GUI起動・日本語
+表示・タップ/2本指スクロール/スクロール方向/ポインタ速度それぞれの
+変更と即時反映・既定値への復元・アプリメニュー「設定」カテゴリからの
+起動・「適用」でGUIを閉じずに繰り返し調整できること・「OK」で保存して
+GUIを閉じること・ウィンドウを閉じた場合に未適用の変更を保存しない
+こと・ログアウト/再ログイン後の設定保持・Persistence環境での再起動を
+跨いだ設定保持。
+
+**未確認事項**: 複数タッチパッドを搭載した実機でのAND判定(全台が
+2本指スクロール対応の場合のみ有効化)の実機確認、USBマウス接続時に
+副作用が無いことの実機確認。
+
+`tests/desktop-polish/test_touchpad_settings.sh`(107シナリオ)で
+検出・設定ファイル読み書き・XInput値の組み立て・ボタン挙動(適用/OK/
+既定値に戻す/未適用破棄)を静的/モック確認済み。
 
 ---
 
