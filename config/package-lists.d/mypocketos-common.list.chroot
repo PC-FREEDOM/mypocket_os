@@ -86,13 +86,18 @@ e2fsprogs
 # に保存されるため、既存のPersistence(/home)でそのまま永続化される。
 flatpak
 
-# ---- GUIインストーラー (Calamares feasibility spike) ----
-# reports/ai-review/20260913-calamares-spike-design.md の設計に基づく
-# 最小実験。Debian公式のcalamares-settings-debianが提供する既定設定
-# (settings.conf・modules/*.conf・branding・launcher・.desktop)をそのまま
-# 使い、MyPocketOS独自のCalamares設定・branding・launcherラッパーは
-# 追加しない。calamares-settings-debianはcryptsetup等を依存として
-# 引き込むため、ISOサイズ・既存hook(1010-enable-cryptsetup.hook.chroot)
-# への副作用をbuild後に確認すること。
+# ---- GUIインストーラー (Calamares、初回リリース正式機能) ----
+# `calamares`・`calamares-settings-debian`はDebian公式パッケージ。
+# MyPocketOS独自の設定は`config/includes.chroot/etc/calamares/`配下
+# (settings.conf・welcome.conf・partition.conf・finished.conf・
+# locale.conf)、および専用ヘルパースクリプト
+# (`mypocketos-installer-menu-state`・`mypocketos-installer-reboot`・
+# `mypocketos-install-media-removal`)として追加済みであり、初回
+# リリースの正式機能として実装・確認済み(専用ディスクへのインストール
+# を正式サポート範囲とする。Dual Boot・既存OSとの共存インストールは
+# 対象外。詳細は`mypocketos-specification-2026-08-31.md` 10節を参照)。
+# calamares-settings-debianはcryptsetup等を依存として引き込むため、
+# ISOサイズ・既存hook(1010-enable-cryptsetup.hook.chroot)への影響を
+# 把握したうえで採用している。
 calamares
 calamares-settings-debian
