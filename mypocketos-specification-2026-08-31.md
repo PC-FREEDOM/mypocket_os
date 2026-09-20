@@ -94,7 +94,7 @@ MyPocketOSはDebian StableとOpenboxを基盤にした軽量ポータブルLinux
 | イメージ形式 | ISO Hybrid | 実装済み |
 | Legacy BIOS | 対応 | 実USB検証済み |
 | 64-bit UEFI | 対応 | VM確認済み。物理UEFI実機でのLive USB起動を実機確認済み(2026-09-20、Standard ISO、Secure Boot有効環境を含む)。Persistence作成済みUSBでのUEFI起動は未確認(17節参照) |
-| Secure Boot | Live USB起動は対応。Installed system側(Calamaresインストール後)の物理実機対応可否は別途確認が必要(10.1.4節参照) | Live USB起動: 物理UEFI実機で実機確認済み(2026-09-20、Standard ISO)。Installed system側: 未検証 |
+| Secure Boot | Live USB起動、およびCalamaresでインストールしたinstalled system起動に対応(確認した物理実機での結果。10.1.4節参照) | Live USB起動: 物理UEFI実機で実機確認済み(2026-09-20、Standard ISO)。Calamaresインストール完走・installed system起動: 物理UEFI実機で実機確認済み(2026-09-21、Standard ISO) |
 | ロケール | `ja_JP.UTF-8` | 実装済み |
 | タイムゾーン | `Asia/Tokyo` | 実装済み |
 | キーボード | 日本語配列 | 実装済み |
@@ -941,15 +941,22 @@ MyPocketOSが使う3.3.14(2025-02リリース)には含まれていない
 
 QEMU/OVMF VM環境では、Secure Boot enabled状態(`mokutil --sb-state`で
 確認)のままCalamaresでインストールしたMyPocketOS installed systemの
-UEFI起動・desktop到達・日本語入力までを確認済み。**ただし、installed
-system(Calamaresインストール後)側の物理実機でのSecure Boot動作は
-未確認であり、「Secure Boot完全対応済み」とは言えない。**
+UEFI起動・desktop到達・日本語入力までを確認済み。
 
 2026-09-20、Live USB自体(Standard ISO)については、物理UEFI実機で
 Secure Boot有効状態のままLiveデスクトップまで正常到達することを
-人間が実機確認した(3節参照)。これはLive USBの起動可否についての
-確認であり、本節が扱うinstalled system側(Calamaresインストール後の
-起動)の物理実機確認とは別の確認結果である。
+人間が実機確認した(3節参照)。
+
+2026-09-21、物理UEFI実機でSecure Bootを有効にしたまま、最新Standard
+ISOからLive起動し、Calamaresの「ディスクの消去」方式によるインストール
+を完走した。USB抜去後、内蔵ディスクからinstalled systemが正常起動し、
+Conkyの「起動モード」が`Installed`と表示されることを人間が実機確認した。
+これにより、**Secure Boot有効環境でのCalamaresインストール完走・installed
+system起動は、物理実機でエンドツーエンド確認済みである。**
+
+ただし、これは確認に用いた物理実機1台での結果であり、全ての機種・
+ファームウェア(Secure Bootの鍵設定等)での動作を保証するものではない。
+また、Base editionでの同様の確認は行っていない。
 
 ### 10.1.5 Calamaresバージョンと将来の再検討事項
 
@@ -1158,9 +1165,9 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - ~~UEFI実USB起動~~ → 2026-09-20、物理UEFI実機でLiveデスクトップまでの起動を実機確認済み(17節参照)
 - Persistence作成済みUSBでUEFI起動
 - UEFI起動メニュー3項目
-- ~~Secure Boot~~ → Live USB起動は2026-09-20に物理UEFI実機のSecure Boot有効環境で実機確認済み。installed system側(Calamaresインストール後)の物理実機での動作は引き続き未確認(10.1.4節・17節参照)
+- ~~Secure Boot~~ → Live USB起動は2026-09-20に物理UEFI実機のSecure Boot有効環境で実機確認済み。2026-09-21には、Secure Boot有効環境でのCalamaresインストール完走・installed system起動も物理実機で確認済み(10.1.4節・17節参照)
 - 最低RAM
-- ~~必要に応じDebian Installer E2E~~ → 通常インストーラーはCalamaresを正式採用(10節参照)。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理Legacy BIOS実機でE2E確認済み(10.1.6節・17節参照。Secure Boot有効状態でのインストール完走・installed system起動の物理実機確認は未確認のまま、10.1.4節参照)
+- ~~必要に応じDebian Installer E2E~~ → 通常インストーラーはCalamaresを正式採用(10節参照)。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理Legacy BIOS実機でE2E確認済み(10.1.6節・17節参照)。Secure Boot有効状態でのインストール完走・installed system起動も、2026-09-21に物理UEFI実機で確認済み(10.1.4節参照)
 - Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02、USB persistence IMG経由は2026-09-06に実機確認済み。Mode A経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
 - Mode A(既存partionを持つ外付けUSBの安全な初期化、2026-09-06拡張)の実機E2E(候補表示から作成・Persistence起動・再起動保持までの一連の流れは2026-09-06に実機確認済み。ただしhelper内部コマンドの個別トレース、署名・mount・swap・holders等の個々の拒否条件を実ブロックデバイスで確認する実機試験、UEFI/Secure Boot環境での確認は未実施のまま、8.3節参照)
 - タッチパッド既定動作(libinput InputClass、2026-09-06追加)の実機E2E(1本指タップ=左クリック・2本指タップ=右クリック・2本指スクロール・タップ&ドラッグ・物理クリック・USBマウスへの明らかな副作用なしは2026-09-06に実機確認済み。ただしトラックポイント搭載機、Bluetoothマウス、`xinput list-props`によるlibinputプロパティの直接確認は未実施のまま、9.3節参照)
@@ -1198,10 +1205,10 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | Persistence再起動後Wi-Fi設定保持 (VM/実機) | ✅ Mode B実機(2026-09-02)・USB persistence IMG経由実機(2026-09-06)、いずれも起動方式(BIOS/UEFI)は不明(Mode A／UEFI／Secure Boot未確認) |
 | 実USB UEFI | ✅ 物理UEFI実機でLiveデスクトップまでの起動を確認済み(2026-09-20、Standard ISO) |
 | Persistence作成済みUSBのUEFI | ⬜ |
-| Secure Boot | ✅(Live USB起動のみ) Live USB起動は物理UEFI実機のSecure Boot有効環境で確認済み(2026-09-20、Standard ISO)。installed system側(Calamaresインストール後)の物理実機でのSecure Boot動作は引き続き未確認(10.1.4節参照) |
+| Secure Boot | ✅ Live USB起動は物理UEFI実機のSecure Boot有効環境で確認済み(2026-09-20、Standard ISO)。Calamaresインストール完走・installed system起動も同環境の物理実機で確認済み(2026-09-21、Standard ISO、10.1.4節参照)。確認した実機での結果であり、全機種での動作保証ではない |
 | 最低RAM | ⬜ |
 | ISO／IMG容量・USB要件 | ⬜ |
-| 通常インストール最終確認 | ✅ 正式機能として確定。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理USB実機・**Legacy BIOS物理実機(2026-09-20)**で確認済み(10.1.6節参照)。Secure Boot有効環境でのLive USB起動は物理実機確認済み(2026-09-20)だが、Secure Boot有効状態でのCalamaresインストール完走・installed system起動そのものの物理実機確認は引き続き未確認(人間による追加確認が必要) |
+| 通常インストール最終確認 | ✅ 正式機能として確定。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理USB実機・**Legacy BIOS物理実機(2026-09-20)**で確認済み(10.1.6節参照)。Secure Boot有効環境でのLive USB起動は物理実機確認済み(2026-09-20)、Secure Boot有効状態でのCalamaresインストール完走・installed system起動も物理UEFI実機で確認済み(2026-09-21、10.1.4節参照) |
 | License / Known Issues / Release Notes | ⬜ |
 | 最終SHA-256 | ⬜ |
 
