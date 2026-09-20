@@ -62,6 +62,8 @@ MyPocketOSはDebian StableとOpenboxを基盤にした軽量ポータブルLinux
 - システム全体を保存する`/ union`
 - 追加インストールしたアプリ本体の永続化
 - Creator版
+- Dual Boot・既存OSとの共存インストール(Calamaresでの通常インストールは
+  専用ディスクへの「ディスクの消去」のみを正式サポート範囲とする、10節参照)
 
 ---
 
@@ -92,7 +94,7 @@ MyPocketOSはDebian StableとOpenboxを基盤にした軽量ポータブルLinux
 | イメージ形式 | ISO Hybrid | 実装済み |
 | Legacy BIOS | 対応 | 実USB検証済み |
 | 64-bit UEFI | 対応予定 | VM確認済み、実USB要検証 |
-| Secure Boot | 対応可否を公開前に実機確認し明記 | 要検証 |
+| Secure Boot | Live USB起動は対応。Installed system側(Calamaresインストール後)の物理実機対応可否は別途確認が必要(10.1.4節参照) | Live USB起動: 物理UEFI実機で実機確認済み(2026-09-20、Standard ISO)。Installed system側: 未検証 |
 | ロケール | `ja_JP.UTF-8` | 実装済み |
 | タイムゾーン | `Asia/Tokyo` | 実装済み |
 | キーボード | 日本語配列 | 実装済み |
@@ -411,7 +413,9 @@ Normal LiveとPersistenceは明示的に分離する。
 いずれの状態も、判定材料が読み取れない・矛盾する場合は`Unknown`へ倒す
 (fail-closed)。2026-09-14、BIOS/UEFI双方のVM(Calamaresインストール後の
 installed system)で`Installed`表示を実地確認済み(詳細は
-`reports/ai-review/20260913-calamares-spike-desktop-fixes.md`参照)。
+`reports/ai-review/20260918-calamares-core-fixes-consolidated.md`
+5節参照。旧`20260913-calamares-spike-desktop-fixes.md`はレポート整理
+〔2026-09-18〕により同ファイルへ統合済み)。
 
 ## 7.3 ブランド表示の残課題(対応済み)
 
@@ -850,22 +854,31 @@ GUIを閉じること・ウィンドウを閉じた場合に未適用の変更�
 
 # 10. 通常インストール
 
-初回公開版ではDebian Installerのlive導入経路を基準とする。
+**Calamaresによる通常インストールは、初回リリースの正式機能である
+(2026-09、製品方針確定)。** MyPocketOSはUSB Liveとして利用できるほか、
+必要に応じて内蔵ストレージへ通常インストールできる。
+
+初回版の正式サポート範囲は、**専用ディスクへのインストール**(対象
+ディスクを丸ごと初期化する「ディスクの消去」)とする。**Dual Boot、
+既存OSとの共存インストールは初回版の正式サポート対象外**とする
+(1.5節)。Calamaresの選択画面には、Debian/Calamares標準の機能として
+「既存領域を残してインストール」「既存OSを置き換える」「手動
+パーティション」も選択肢として表示されるが、これらの組み合わせに
+ついてMyPocketOSは十分な動作検証を行っていない。動作しないと断定する
+ものではないが、初回版では正式な検証・サポートの対象外として扱う。
+他OSとの共存を希望する利用者には、初回版でのCalamares利用は推奨しない。
 
 - Liveセッション一時変更を暗黙コピーしない
 - Persistence内ユーザーデータを暗黙コピーしない
 
-Calamaresは将来候補。
+## 10.1 Calamares検証結果 (2026-09、実装・確認済み)
 
-通常インストールを公開機能として明記する場合、リリース前に最終E2Eを実施する。
-
-## 10.1 Calamares検証結果 (2026-09、feasibility spike)
-
-`feat/calamares-install-spike` branchでの検証により、Calamares(現行
-バージョン3.3.14、Debian 13 trixie収録版)を用いた通常インストールの
-技術的な実現可能性を確認した。以下は本検証で確定した技術仕様であり、
-通常インストール自体を初回公開版へ含めるかどうかの判断(上記のとおり
-現時点ではPhase 3の将来候補のまま、18節参照)とは独立して記録する。
+`feat/calamares-install-spike` branchでの検証を経て、Calamares(現行
+バージョン3.3.14、Debian 13 trixie収録版)を用いた通常インストールを
+mainへ実装・統合した。2026-09、この検証結果と実機確認結果に基づき、
+Calamaresを初回リリースの正式機能として採用することが確定した(上記
+「# 10. 通常インストール」冒頭・1.5節参照)。以下は確定した技術仕様
+である。
 
 ### 10.1.1 自動パーティション方針
 
@@ -928,10 +941,15 @@ MyPocketOSが使う3.3.14(2025-02リリース)には含まれていない
 
 QEMU/OVMF VM環境では、Secure Boot enabled状態(`mokutil --sb-state`で
 確認)のままCalamaresでインストールしたMyPocketOS installed systemの
-UEFI起動・desktop到達・日本語入力までを確認済み。**ただし実機での
-Secure Boot動作は未確認であり、「Secure Boot完全対応済み」とは言えない。**
-3節の既存記載(Live USB自体のSecure Boot対応、要検証)とは別の確認結果
-として、installed system側の状況をここに独立して記録する。
+UEFI起動・desktop到達・日本語入力までを確認済み。**ただし、installed
+system(Calamaresインストール後)側の物理実機でのSecure Boot動作は
+未確認であり、「Secure Boot完全対応済み」とは言えない。**
+
+2026-09-20、Live USB自体(Standard ISO)については、物理UEFI実機で
+Secure Boot有効状態のままLiveデスクトップまで正常到達することを
+人間が実機確認した(3節参照)。これはLive USBの起動可否についての
+確認であり、本節が扱うinstalled system側(Calamaresインストール後の
+起動)の物理実機確認とは別の確認結果である。
 
 ### 10.1.5 Calamaresバージョンと将来の再検討事項
 
@@ -947,6 +965,23 @@ MSDOS/MBR)をそのまま利用する。将来的に以下を再検討する。
 
 今回のbranch(`feat/calamares-install-spike`)では、上記将来検討事項の
 実装は行わない。
+
+### 10.1.6 Legacy BIOS物理実機E2E (2026-09-20確認済み)
+
+2026-09-20、最新Standard ISOを用いて、Legacy BIOS物理実機でCalamares
+による通常インストールのエンドツーエンドを人間が実機確認した。
+
+- Legacy BIOSモードでのLive USB起動
+- Calamaresの起動
+- 専用ディスクへの「ディスクの消去」方式でのインストール完走
+- インストールメディア取り外し案内の表示
+- USB取り外し後、内蔵ディスクからのMyPocketOS Installed system起動
+- Conky起動モード表示が`Installed`になること
+
+以上により、UEFI VM・Legacy BIOS VM・物理UEFI実機に加え、**Legacy BIOS
+物理実機でもCalamaresによる通常インストールのエンドツーエンド成功が
+確認された**(17節参照)。同一実機(Installed system)でtint2バッテリー
+残量%表示も確認済み(16.2節参照)。
 
 ---
 
@@ -1079,7 +1114,7 @@ Fluent archive：
 ```text
 repository: PC-FREEDOM/mypocket_os
 branch:     main
-commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
+commit:     e5f5e162928f8de36ffca6eaa9dd72aad142b83d
 ```
 
 主な成立済み要素：
@@ -1100,6 +1135,8 @@ commit:     0af37c0f3fbaaa11b0bc1d7aa75a4b48ebb2569f
 - Standard日常アプリ
 - edition対応スクリプト
 - 自動回帰テスト
+- Calamaresによる通常インストール(専用ディスクへのインストール、初回
+  リリース正式機能。10節参照)
 
 ---
 
@@ -1118,15 +1155,16 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 
 ## 16.2 実機・互換性
 
-- UEFI実USB起動
+- ~~UEFI実USB起動~~ → 2026-09-20、物理UEFI実機でLiveデスクトップまでの起動を実機確認済み(17節参照)
 - Persistence作成済みUSBでUEFI起動
 - UEFI起動メニュー3項目
-- Secure Boot
+- ~~Secure Boot~~ → Live USB起動は2026-09-20に物理UEFI実機のSecure Boot有効環境で実機確認済み。installed system側(Calamaresインストール後)の物理実機での動作は引き続き未確認(10.1.4節・17節参照)
 - 最低RAM
 - 必要に応じDebian Installer E2E
 - Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02、USB persistence IMG経由は2026-09-06に実機確認済み。Mode A経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
 - Mode A(既存partionを持つ外付けUSBの安全な初期化、2026-09-06拡張)の実機E2E(候補表示から作成・Persistence起動・再起動保持までの一連の流れは2026-09-06に実機確認済み。ただしhelper内部コマンドの個別トレース、署名・mount・swap・holders等の個々の拒否条件を実ブロックデバイスで確認する実機試験、UEFI/Secure Boot環境での確認は未実施のまま、8.3節参照)
 - タッチパッド既定動作(libinput InputClass、2026-09-06追加)の実機E2E(1本指タップ=左クリック・2本指タップ=右クリック・2本指スクロール・タップ&ドラッグ・物理クリック・USBマウスへの明らかな副作用なしは2026-09-06に実機確認済み。ただしトラックポイント搭載機、Bluetoothマウス、`xinput list-props`によるlibinputプロパティの直接確認は未実施のまま、9.3節参照)
+- ~~tint2バッテリー残量%表示(PR #32)の実ノートPCでの確認~~ → 2026-09-20、Legacy BIOS物理実機(Calamaresインストール後のInstalled system)でバッテリー残量%表示を実機確認済み(10.1.6節参照)
 
 ## 16.3 配布仕様
 
@@ -1150,7 +1188,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | edition切替で他ISO非破壊 | ✅ |
 | Base／Standard package差 | ✅ |
 | 自動テストFAIL=0 | ✅ 現行報告上 |
-| GitHub CI PASS | ✅ PR #18時点 |
+| GitHub CI PASS | ✅ 直近のPR(#50、Calamares関連の一連のPRを含む)まで継続してPASS。mainはbranch protectionにより2つのstatus check通過が必須(現在のHEAD `e5f5e16`まで維持) |
 | Normal Live／Persistence VM | ✅ |
 | Base／Standard VM E2E | ✅ |
 | 実USB Legacy BIOS | ✅ |
@@ -1158,12 +1196,12 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | Persistence再起動後 `/home`保持 | ✅ |
 | Normal Liveとの分離 | ✅ |
 | Persistence再起動後Wi-Fi設定保持 (VM/実機) | ✅ Mode B実機(2026-09-02)・USB persistence IMG経由実機(2026-09-06)、いずれも起動方式(BIOS/UEFI)は不明(Mode A／UEFI／Secure Boot未確認) |
-| 実USB UEFI | ⬜ |
+| 実USB UEFI | ✅ 物理UEFI実機でLiveデスクトップまでの起動を確認済み(2026-09-20、Standard ISO) |
 | Persistence作成済みUSBのUEFI | ⬜ |
-| Secure Boot | ⬜ |
+| Secure Boot | ✅(Live USB起動のみ) Live USB起動は物理UEFI実機のSecure Boot有効環境で確認済み(2026-09-20、Standard ISO)。installed system側(Calamaresインストール後)の物理実機でのSecure Boot動作は引き続き未確認(10.1.4節参照) |
 | 最低RAM | ⬜ |
 | ISO／IMG容量・USB要件 | ⬜ |
-| 通常インストール最終確認 | ⬜ 必要に応じて |
+| 通常インストール最終確認 | ✅ 正式機能として確定。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理USB実機・**Legacy BIOS物理実機(2026-09-20)**で確認済み(10.1.6節参照)。Secure Boot有効環境でのLive USB起動は物理実機確認済み(2026-09-20)だが、Secure Boot有効状態でのCalamaresインストール完走・installed system起動そのものの物理実機確認は引き続き未確認(人間による追加確認が必要) |
 | License / Known Issues / Release Notes | ⬜ |
 | 最終SHA-256 | ⬜ |
 
@@ -1179,6 +1217,9 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - Wi-Fi／NetworkManager設定のPersistence
 - Mode A／Mode B
 - USB persistence IMG
+- Calamaresによる通常インストール(専用ディスクへのインストールを正式
+  サポート範囲とする。Dual Boot・既存OSとの共存インストールは対象外。
+  10節参照)
 - 日本語環境
 - デスクトップ仕上げ
 - Flatpak標準搭載（`flatpak --user`を追加アプリ導入の推奨方式とする。
@@ -1196,7 +1237,6 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
   インストールなど、Phase 1のFlatpak方式では扱わない範囲を指す）
 
 ## Phase 3
-- Calamares
 - Live／Persistenceから通常インストールへの安全な移行
 - インストール後Live専用機能整理
 
