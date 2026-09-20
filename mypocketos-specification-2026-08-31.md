@@ -93,7 +93,7 @@ MyPocketOSはDebian StableとOpenboxを基盤にした軽量ポータブルLinux
 | ビルド基盤 | `live-build 20250505+deb13u1`系 | 実装済み |
 | イメージ形式 | ISO Hybrid | 実装済み |
 | Legacy BIOS | 対応 | 実USB検証済み |
-| 64-bit UEFI | 対応予定 | VM確認済み、実USB要検証 |
+| 64-bit UEFI | 対応 | VM確認済み。物理UEFI実機でのLive USB起動を実機確認済み(2026-09-20、Standard ISO、Secure Boot有効環境を含む)。Persistence作成済みUSBでのUEFI起動は未確認(17節参照) |
 | Secure Boot | Live USB起動は対応。Installed system側(Calamaresインストール後)の物理実機対応可否は別途確認が必要(10.1.4節参照) | Live USB起動: 物理UEFI実機で実機確認済み(2026-09-20、Standard ISO)。Installed system側: 未検証 |
 | ロケール | `ja_JP.UTF-8` | 実装済み |
 | タイムゾーン | `Asia/Tokyo` | 実装済み |
@@ -1160,7 +1160,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - UEFI起動メニュー3項目
 - ~~Secure Boot~~ → Live USB起動は2026-09-20に物理UEFI実機のSecure Boot有効環境で実機確認済み。installed system側(Calamaresインストール後)の物理実機での動作は引き続き未確認(10.1.4節・17節参照)
 - 最低RAM
-- 必要に応じDebian Installer E2E
+- ~~必要に応じDebian Installer E2E~~ → 通常インストーラーはCalamaresを正式採用(10節参照)。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理Legacy BIOS実機でE2E確認済み(10.1.6節・17節参照。Secure Boot有効状態でのインストール完走・installed system起動の物理実機確認は未確認のまま、10.1.4節参照)
 - Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02、USB persistence IMG経由は2026-09-06に実機確認済み。Mode A経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
 - Mode A(既存partionを持つ外付けUSBの安全な初期化、2026-09-06拡張)の実機E2E(候補表示から作成・Persistence起動・再起動保持までの一連の流れは2026-09-06に実機確認済み。ただしhelper内部コマンドの個別トレース、署名・mount・swap・holders等の個々の拒否条件を実ブロックデバイスで確認する実機試験、UEFI/Secure Boot環境での確認は未実施のまま、8.3節参照)
 - タッチパッド既定動作(libinput InputClass、2026-09-06追加)の実機E2E(1本指タップ=左クリック・2本指タップ=右クリック・2本指スクロール・タップ&ドラッグ・物理クリック・USBマウスへの明らかな副作用なしは2026-09-06に実機確認済み。ただしトラックポイント搭載機、Bluetoothマウス、`xinput list-props`によるlibinputプロパティの直接確認は未実施のまま、9.3節参照)
