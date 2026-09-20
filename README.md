@@ -541,8 +541,8 @@ MyPocketOSのLive環境は、通常起動時にlive-configの自動ログイン�
 
 これは `live-config`（`0030-live-debconfig_passwd` スクリプト、コメント
 "Default password is: live"）が設定するDebian Live標準の既定値であり、
-MyPocketOS独自の設定ではありません。また、将来実装予定の通常インストール環境
-（Calamares等）で作成されるユーザーアカウントの認証情報とは別のものです。
+MyPocketOS独自の設定ではありません。また、Calamaresによる通常インストール
+（初回リリースの正式機能）で作成されるユーザーアカウントの認証情報とは別のものです。
 
 VMでの動作確認により、デスクトップ右クリックのjgmenuから「ログアウト」を
 実行してLightDMのログイン画面へ正常に戻ること、および上記の既定値（`user` / `live`）で
