@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=MyPocketOS
+Description=MyPocketOS boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/mypocketos
+ScriptFile=/usr/share/plymouth/themes/mypocketos/mypocketos.script

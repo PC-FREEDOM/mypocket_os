@@ -1,0 +1,49 @@
+# MyPocketOS Plymouth theme
+
+# Dark navy background
+Window.SetBackgroundTopColor (0.02, 0.04, 0.08);
+Window.SetBackgroundBottomColor (0.02, 0.04, 0.08);
+
+# Center logo
+logo = Image("logo.png");
+logo = logo.Scale(168, 168);
+logo_sprite = Sprite(logo);
+
+logo_x = (Window.GetWidth() - logo.GetWidth()) / 2;
+logo_y = (Window.GetHeight() - logo.GetHeight()) / 2 - 20;
+
+logo_sprite.SetPosition(logo_x, logo_y, 0);
+
+# Three-dot activity indicator
+dot_image = Image.Text("●", 0.35, 0.65, 1.0);
+
+dot1 = Sprite(dot_image);
+dot2 = Sprite(dot_image);
+dot3 = Sprite(dot_image);
+
+dot_spacing = 28;
+dots_width = dot_spacing * 2 + dot_image.GetWidth();
+dots_x = (Window.GetWidth() - dots_width) / 2;
+dots_y = logo_y + logo.GetHeight() + 32;
+
+dot1.SetPosition(dots_x, dots_y, 0);
+dot2.SetPosition(dots_x + dot_spacing, dots_y, 0);
+dot3.SetPosition(dots_x + dot_spacing * 2, dots_y, 0);
+
+anim_step = 0;
+
+fun refresh_callback ()
+{
+    phase = global.anim_step / 30.0 * 2.0 * Math.Pi;
+
+    global.dot1.SetOpacity(0.25 + 0.75 * (0.5 + 0.5 * Math.Cos(phase)));
+    global.dot2.SetOpacity(0.25 + 0.75 * (0.5 + 0.5 * Math.Cos(phase - 2.094)));
+    global.dot3.SetOpacity(0.25 + 0.75 * (0.5 + 0.5 * Math.Cos(phase - 4.189)));
+
+    global.anim_step++;
+
+    if (global.anim_step >= 30)
+        global.anim_step = 0;
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
