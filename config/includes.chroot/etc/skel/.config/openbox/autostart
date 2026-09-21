@@ -3,6 +3,19 @@
 # MyPocketOS - Openbox セッションの常駐プログラム (最小構成)
 #
 
+# 標準壁紙 (MyPocketOS既定の背景画像)。tint2・Conkyより前に、フォアグラウンドで
+# 1回だけ設定する。hsetrootはX11のルート背景 (_XROOTPMAP_ID) を設定して即座に
+# 終了する (常駐しない)。Conkyは own_window_transparent = true (背景透過) の
+# ため、Conky起動前に壁紙が設定済みであることが望ましい。
+# -cover: 画像の縦横比を保ったまま、画面全体を覆うように拡大して中央に配置する
+# (hsetroot(1)。画面が16:9でない場合は左右または上下が切り取られる。
+# なお -fill は「縦横比を無視した引き伸ばし」であり、-cover とは異なる)。
+# 画像またはhsetrootが無い場合・失敗した場合は何もせず、以降の起動処理を
+# 止めない。
+if [ -r /usr/share/backgrounds/mypocketos/mypocketos-default.png ] && command -v hsetroot >/dev/null 2>&1; then
+	hsetroot -cover /usr/share/backgrounds/mypocketos/mypocketos-default.png || true
+fi
+
 tint2 &
 nm-applet &
 lxpolkit &
