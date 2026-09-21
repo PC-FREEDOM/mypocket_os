@@ -173,6 +173,27 @@ tests/desktop-polish/test_touchpad_settings.sh
   `scripts/build.sh`がincludes.chrootをedition別に切り替えていないことを
   確認する。実LightDM・実greeter・実Xは一切使用しない(実際のログイン画面
   の表示は実機/VMでの確認が必要で、本テストの対象外)。
+- `test_calamares_branding.sh`: MyPocketOS独自のCalamares branding
+  (2026-09-21、`config/includes.chroot/etc/calamares/branding/mypocketos/`)
+  を静的に確認する。`componentName`がディレクトリ名と一致し、
+  `settings.conf`が`branding: mypocketos`を選択していること、`strings`が
+  MyPocketOS / 0.1 / 公式GitHubのURL(`releaseNotesUrl`は空)で、
+  Calamares 3.3.14に存在しないキーを使っていないこと、`images`と
+  `slideshow`(`.qml`)が実在すること(Calamaresは参照ミスで起動時にFATAL
+  になる)、画像が`branding/logo/final/`の正式シンボル(C2、文字なし)で
+  ロゴタイプ資産を使っていないこと(`logo.png`・`welcome-logo.png`は透明
+  キャンバスを保ったまま縮小した画像で、見かけ上のサイズを元の256px版
+  との比で確認する。`logo.png`はさらにサイドバー上部の余白調整のため、
+  縦方向に下寄せされていること。`icon.png`と、`show.qml`が使う
+  `welcome.png`は縮小なしの複製であること。`welcome-logo.png`と`show.qml`は
+  SHA-256で固定し、意図しない変更を検出する)、Debianの文字列・URLが残って
+  いないこと、`style`が有効な4項目のみで文字色との可読性を満たすこと、
+  Debian提供のbrandingや"Install Debian"起動項目を書き換えていないこと、
+  Base/Standard共通(`config/includes.chroot`)であることを確認する。
+  実Calamares・実ISO・実インストールは一切使用しない。`bootloaderEntryName`
+  はESP上のEFIブートローダーID・NVRAMのブートエントリ名・GRUB表示にも
+  影響するため、UEFI・Secure Boot・Legacy BIOSでの実インストールと起動は
+  実機での確認が別途必要(本テストの対象外)。
 
 ### ネットワーク表示の実装経緯 (2026-09-06〜2026-09-07)
 
