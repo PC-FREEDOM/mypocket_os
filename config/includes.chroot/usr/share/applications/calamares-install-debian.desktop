@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install MyPocketOS
+Name[ja]=MyPocketOSをインストール
+GenericName=Calamares Installer
+GenericName[ja]=Calamares インストーラー
+Exec=calamares-install-debian
+Comment=Install MyPocketOS on this computer
+Comment[ja]=このコンピューターに MyPocketOS をインストールします
+Keywords=calamares;system;install;mypocketos;installer
+Icon=mypocketos-installer
+Terminal=false
+Categories=Qt;System;
+StartupWMClass=calamares
+StartupNotify=True

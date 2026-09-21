@@ -312,8 +312,20 @@ check "Debian branding directory (calamares-settings-debian) is not shipped by t
 	test ! -e "${CHROOT_INC}/etc/calamares/branding/debian"
 check "no calamares files are shipped under /usr/share/calamares by the repo" \
 	test ! -e "${CHROOT_INC}/usr/share/calamares"
-check "Debian 'Install Debian' launcher is not overridden here (separate task)" \
-	sh -c 'test ! -e "$1/usr/share/applications/calamares-install-debian.desktop" && test ! -e "$1/usr/share/pixmaps/install-debian.png"' _ "${CHROOT_INC}"
+check "MyPocketOS installer launcher overrides Debian desktop entry" \
+	test -f "${CHROOT_INC}/usr/share/applications/calamares-install-debian.desktop"
+check "MyPocketOS installer launcher keeps Debian wrapper Exec" \
+	grep -qx 'Exec=calamares-install-debian' "${CHROOT_INC}/usr/share/applications/calamares-install-debian.desktop"
+check "MyPocketOS installer launcher has branded English name" \
+	grep -qx 'Name=Install MyPocketOS' "${CHROOT_INC}/usr/share/applications/calamares-install-debian.desktop"
+check "MyPocketOS installer launcher has branded Japanese name" \
+	grep -qx 'Name\[ja\]=MyPocketOSをインストール' "${CHROOT_INC}/usr/share/applications/calamares-install-debian.desktop"
+check "MyPocketOS installer launcher uses branded icon" \
+	grep -qx 'Icon=mypocketos-installer' "${CHROOT_INC}/usr/share/applications/calamares-install-debian.desktop"
+check "MyPocketOS installer icon exists" \
+	test -f "${CHROOT_INC}/usr/share/pixmaps/mypocketos-installer.png"
+check "Debian install icon itself is not overridden by the repo" \
+	test ! -e "${CHROOT_INC}/usr/share/pixmaps/install-debian.png"
 check "no stylesheet.qss / productWallpaper yet (out of scope)" \
 	sh -c '! test -e "$1/stylesheet.qss" && ! grep -q "productWallpaper" "$2"' _ "${BRANDING_DIR}" "${DESC}"
 
