@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-4 -4 108 108" width="512" height="512">
+  <title>MyPocketOS logo candidate A</title>
+  <circle cx="16" cy="16" r="13.5" fill="#0057D9"/>
+  <circle cx="50" cy="16" r="13.5" fill="#2F8CFF"/>
+  <circle cx="84" cy="16" r="13.5" fill="#74BEFF"/>
+  <circle cx="16" cy="50" r="13.5" fill="#14B5FF"/>
+  <circle cx="50" cy="50" r="13.5" fill="#2F8CFF"/>
+  <circle cx="84" cy="50" r="13.5" fill="#8F7BFF"/>
+  <circle cx="16" cy="84" r="13.5" fill="#74BEFF"/>
+  <circle cx="50" cy="84" r="13.5" fill="#74BEFF"/>
+  <circle cx="84" cy="84" r="13.5" fill="#7048F0"/>
+</svg>
