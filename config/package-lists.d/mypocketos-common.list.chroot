@@ -30,6 +30,14 @@ lightdm-gtk-greeter
 pcmanfm
 lxterminal
 
+# ---- 壁紙表示 (標準壁紙をルート背景へ設定) ----
+# hsetroot 1.0.5 (Debian 13 trixie main、apt-cache showで確認済み。依存は
+# libimlib2・libx11・libxinerama1のみ)。Openboxのautostartから
+# `hsetroot -cover` で標準壁紙を設定する (config/includes.chroot/etc/skel/
+# .config/openbox/autostart参照)。Base/Standard両editionで同じ見た目に
+# するため共通リストに置く。
+hsetroot
+
 # ---- ネットワーク ----
 network-manager
 network-manager-gnome

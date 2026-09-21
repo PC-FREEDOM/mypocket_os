@@ -148,6 +148,17 @@ tests/desktop-polish/test_touchpad_settings.sh
   チェックボックス無効化)、yad初期表示値がon/off設定を正しく
   TRUE/FALSE・選択済みラベルへ変換していること。実root権限・実X11・
   実xinput・実yadは一切使用しない。
+- `test_wallpaper.sh`: MyPocketOS標準壁紙(2026-09-21)の組み込みを静的に
+  確認する。壁紙(`config/includes.chroot/usr/share/backgrounds/mypocketos/
+  mypocketos-default.png`)が1920x1080の8bit RGB PNGで
+  `branding/wallpaper/`の書き出しと同一であること、`hsetroot`がBase/
+  Standard共通のpackage-listにのみ1回含まれること(`scripts/build.sh`が
+  editionによらずcommonを配置することも確認)、Openbox autostartの
+  `hsetroot`呼び出しが1回だけで縦横比を保つ`-cover`を使い(縦横比を
+  無視する`-fill`等を使わず)、存在する壁紙パスを指し、存在確認ガード付きで
+  tint2・Conkyより前にあること、既存の起動項目が1回ずつ残っていることを
+  確認する。実X・実hsetroot・実ISOは一切使用しない(画面への実際の表示は
+  実機/VMでの確認が必要で、本テストの対象外)。
 
 ### ネットワーク表示の実装経緯 (2026-09-06〜2026-09-07)
 
