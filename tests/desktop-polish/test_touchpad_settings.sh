@@ -94,8 +94,14 @@ check "the referenced icon actually exists in the committed MyPocketOS-Fluent-ye
 	sh -c 'tar tzf "$1" 2>/dev/null | grep -q "scalable/apps/preferences-desktop-touchpad.svg$"' _ "${ICON_ARCHIVE}"
 check "タッチパッド設定 is NOT registered as a top-level append.csv entry (comments mentioning it are fine; only the .desktop file is the entry point)" \
 	sh -c '! grep -vE "^[[:space:]]*#" "$1" | grep -qE "^タッチパッド設定,"' _ "${APPEND_CSV}"
-check "no other new .desktop file was introduced besides mypocketos-touchpad-settings.desktop" \
-	sh -c '[ "$(find "$1" -iname "*.desktop" 2>/dev/null | wc -l)" -eq 1 ]' _ "${REPO_ROOT}/config/includes.chroot"
+check "only the expected MyPocketOS .desktop overrides are present" \
+	sh -c 'set -eu
+root="$1"
+files="$(find "$root" -type f -iname "*.desktop" -printf "%P\n" 2>/dev/null | sort)"
+expected="$(printf "%s\n" \
+"usr/share/applications/calamares-install-debian.desktop" \
+"usr/share/applications/mypocketos-touchpad-settings.desktop" | sort)"
+[ "$files" = "$expected" ]' _ "${REPO_ROOT}/config/includes.chroot"
 check "existing append.csv entries (永続領域を作成 etc.) are still intact" \
 	grep -q '永続領域を作成' "${APPEND_CSV}"
 check "existing append.csv entry (Openbox再設定) is still intact" \
