@@ -1,0 +1,76 @@
+# MyPocketOS - Calamares branding
+#
+# Debian提供の branding (calamares-settings-debian の
+# /etc/calamares/branding/debian/) は書き換えず、MyPocketOS独自の
+# branding component として追加する。settings.conf の branding: で
+# このディレクトリ名 (mypocketos) を選択する。
+# /etc/calamares/branding/ は /usr/share/calamares/branding/ より先に
+# 検索される。componentName はディレクトリ名と一致させること
+# (不一致だとCalamaresが起動時にFATALになる)。
+#
+# images に列挙したファイルと slideshow のQMLファイルは必ず実在させること
+# (無いとCalamaresが起動時にFATALになる)。
+# 画像はすべて branding/logo/final/ の正式シンボル (C2、文字なし) の
+# 複製であり、ロゴタイプ (文字入り) は暫定デザインのため使用しない。
+---
+componentName:   mypocketos
+welcomeStyleCalamares: true
+welcomeExpandingLogo: true
+windowExpanding: normal
+windowSize: 800px,580px
+windowPlacement: center
+
+# 文字列は ${NAME} などのos-release展開を使わず固定値にする
+# (展開すると /etc/os-release の "Debian GNU/Linux" になってしまうため)。
+#
+# bootloaderEntryName は文字列表示だけでなく、インストール先のEFIブート
+# ローダーID (ESP上の /EFI/<名前>/ ・NVRAMのブートエントリ名) と
+# GRUB_DISTRIBUTOR にも使われる (bootloader/grubcfgモジュール)。
+#
+# releaseNotesUrl は空 (Release Notesがまだ存在しないため)。空にすると
+# welcomeページの該当ボタンは表示されない。donateUrl は使用しない
+# (welcome.conf に showDonateUrl が無く、ボタンは表示されない)。
+strings:
+    productName:         MyPocketOS
+    shortProductName:    MyPocketOS
+    version:             "0.1"
+    shortVersion:        "0.1"
+    versionedName:       MyPocketOS 0.1
+    shortVersionedName:  MyPocketOS 0.1
+    bootloaderEntryName: MyPocketOS
+    productUrl:          https://github.com/PC-FREEDOM/mypocket_os
+    supportUrl:          https://github.com/PC-FREEDOM/mypocket_os/issues
+    knownIssuesUrl:      https://github.com/PC-FREEDOM/mypocket_os/issues
+    releaseNotesUrl:     ""
+
+sidebar: widget
+navigation: widget
+
+# productLogo: サイドバー (暗い青) に表示されるため、暗背景用シンボルを使う。
+# productIcon / productWelcome: 明るい背景・ウィンドウアイコン向けの
+# 標準シンボルを使う。
+#
+# logo.png と welcome-logo.png は、256x256の透明キャンバスを保ったまま
+# シンボルを縮小して余白を増やした画像 (見かけ上のサイズ: logo.png = 元の約70%、
+# welcome-logo.png = 元の約68%)。logo.png はサイドバー上部の上下余白を
+# 揃えるため、キャンバス内で約8px下に寄せている。Calamaresのレイアウトは
+# 変更していない。
+# welcome.png (縮小なしの標準シンボル) は show.qml が使うため、
+# productWelcome には使わず別ファイルにしている。
+images:
+    productLogo:         "logo.png"
+    productIcon:         "icon.png"
+    productWelcome:      "welcome-logo.png"
+
+slideshow:               "show.qml"
+
+# サイドバー配色 (branding.descで設定できる4項目のみ)。
+# 濃い青を土台に、現在の項目をブランドの青 (#0057D9) で示す。
+# 文字色との比 (WCAG): 白 on #0B2A6B = 約13.5:1、白 on #0057D9 = 約6.2:1。
+style:
+   SidebarBackground:        "#0B2A6B"
+   SidebarText:              "#FFFFFF"
+   SidebarTextCurrent:       "#FFFFFF"
+   SidebarBackgroundCurrent: "#0057D9"
+
+slideshowAPI: 2
