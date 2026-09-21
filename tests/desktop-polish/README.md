@@ -159,6 +159,20 @@ tests/desktop-polish/test_touchpad_settings.sh
   tint2・Conkyより前にあること、既存の起動項目が1回ずつ残っていることを
   確認する。実X・実hsetroot・実ISOは一切使用しない(画面への実際の表示は
   実機/VMでの確認が必要で、本テストの対象外)。
+- `test_lightdm_branding.sh`: LightDM (lightdm-gtk-greeter) のログイン画面
+  背景(2026-09-21)を静的に確認する。`config/includes.chroot/etc/lightdm/
+  lightdm-gtk-greeter.conf.d/50_mypocketos.conf`が存在し、`[greeter]`
+  セクション1つに有効な設定キーが`background`だけで、
+  `/usr/share/backgrounds/mypocketos/mypocketos-default.png`を指すこと、
+  その壁紙がconfig/includes.chroot配下に実在するPNGであること、
+  `theme-name`・`default-user-image`を設定していないこと(独自GTKテーマ・
+  CSSも追加していないこと)、Debianパッケージ提供のconffile・drop-in
+  (`lightdm-gtk-greeter.conf`・`lightdm.conf`・`01_debian.conf`)を
+  リポジトリ側で上書き・複製していないこと、`lightdm`・
+  `lightdm-gtk-greeter`がBase/Standard共通のcommonリストに1回だけあり、
+  `scripts/build.sh`がincludes.chrootをedition別に切り替えていないことを
+  確認する。実LightDM・実greeter・実Xは一切使用しない(実際のログイン画面
+  の表示は実機/VMでの確認が必要で、本テストの対象外)。
 
 ### ネットワーク表示の実装経緯 (2026-09-06〜2026-09-07)
 
