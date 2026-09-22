@@ -1134,7 +1134,7 @@ Fluent archive：
 ```text
 repository: PC-FREEDOM/mypocket_os
 branch:     main
-commit:     e5f5e162928f8de36ffca6eaa9dd72aad142b83d
+commit:     cde6547d00074d83059662f7b988d51ee9bf6521
 ```
 
 主な成立済み要素：
