@@ -91,13 +91,15 @@ startup_notifications = 0
 #-------------------------------------
 # Button (メニュー: jgmenu)
 button = new
+button_icon = /usr/share/pixmaps/mypocketos-menu.png
+button_max_icon_size = 20
 button_text = メニュー
-button_tooltip = メニュー
+button_tooltip = MyPocketOS メニュー
 button_font = sans 10
 button_font_color = #eeeeee 100
 button_background_id = 2
 button_centered = 1
-button_padding = 8 0 2
+button_padding = 6 0 2
 button_lclick_command = jgmenu_run
 
 #-------------------------------------
