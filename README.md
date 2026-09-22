@@ -197,24 +197,21 @@ VM・実機いずれのNormal Live環境でも`flatpak --version`(Flatpak 1.16.6
 remote設定・アプリ設定/データが、いずれも`/home` Persistenceで保持
 されることを実機E2Eで確認済みである。
 
-**実測ISOサイズ**
+**ISOサイズ**
 
-`./scripts/build.sh base` / `./scripts/build.sh standard` でそれぞれ実際に
-ビルドし、確認した値です。
+初回リリースで公開するBase版・Standard版の最終サイズは、
+リリース用確定コミットから両editionを再ビルドした後に測定し、
+Release NotesおよびSHA-256とあわせて記録します。
 
-| edition | ISO | サイズ |
+参考として、Flatpak標準搭載前の過去ビルドでは次の値でした。
+これらは**現在のリリース候補ISOのサイズではありません。**
+
+| edition | ISO | 過去の参考値 |
 |---|---|---|
 | Base | `mypocketos-base-amd64.hybrid.iso` | 約1.33 GiB (1,428,750,336 bytes) |
 | Standard | `mypocketos-standard-amd64.hybrid.iso` | 約1.67 GiB (1,788,149,760 bytes) |
 
-差は約343 MiB (359,399,424 bytes、StandardはBaseより約25.15%大きく、
-BaseはStandardより約20.10%小さい) です。ISOのSHA-256はビルドごとに
-変わる (タイムスタンプ等を含むため) ため、ここには記載しません。
-
-**注**: 上記はFlatpak標準搭載 (前述「ユーザーによる追加アプリ導入
-(Flatpak)」節参照) 追加前の実測値であり、現在は`flatpak`本体および
-その依存パッケージ (bubblewrap・xdg-desktop-portal等) の分だけ実際の
-ISOサイズが増加しています。再測定は今後別途実施予定です。
+最終的なISOサイズとSHA-256は、リリース前の最終ビルド後に確定します。
 
 ### アイコンテーマ (MyPocketOS-Fluent-yellow)
 
@@ -1838,8 +1835,9 @@ QEMU/KVM VM上で次を確認しました。
 - 通常Live (`nopersistence`) では永続化したファイルが表示されず、
   persistenceパーティションもマウントされないことを確認。
 
-上記の検証結果を踏まえ、この構成 (Standard版 + USB persistence 2GiB) の
-配布媒体には、**8GB以上のUSBメモリを推奨**します。
+上記の検証では8GB級USBでも動作を確認できましたが、初回公開版では
+余裕を持たせるため、**USBメモリは16GB以上を最小目安、32GB以上を推奨**
+とします。
 
 ### 現行(2行版)persistence.confでのVM実地検証 (2026-09-06)
 
@@ -2097,6 +2095,18 @@ i915.enable_psr=0
 MyPocketOSはUSB Live環境として利用できるほか、Calamaresインストーラー
 により内蔵ストレージ(HDD/SSD)へ通常インストールすることもできます。
 **Calamaresによる通常インストールは、初回リリースの正式機能です。**
+
+### インストール要件
+
+Calamaresによる通常インストールには、以下の条件が必要です。
+
+- インターネット接続
+- 16 GiB以上のインストール先ストレージ
+- 約2 GiB以上のRAM
+
+Wi-Fiを使用する場合は、**Calamaresを起動する前にネットワークへ接続して
+ください。** Calamares起動後に接続しても、インターネット接続の要件表示が
+自動的に再評価されない場合があります。
 
 ### 正式サポート範囲
 
