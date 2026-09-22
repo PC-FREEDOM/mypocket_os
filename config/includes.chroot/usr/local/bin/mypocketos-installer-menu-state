@@ -77,6 +77,20 @@
 # 本体・calamares-settings-debianパッケージへの変更は一切不要。
 # 実機VM検証済み(jgmenu_run apps の出力から該当項目が消えることを確認)。
 #
+# Hidden=true と NoDisplay=true を併用する理由 (2026-09-22、jgmenu 4.5.0の
+# ソースと、ビルド済みchroot内でのjgmenu-apps実行により確認):
+# jgmenu-apps (csv_cmd=apps) は .desktop の Hidden・OnlyShowIn・NotShowIn を
+# 解釈しない (読むのは Name・Exec・Icon・Categories・NoDisplay 等のみで、
+# 非表示にする条件は NoDisplay=true か TryExec が見つからない場合だけ)。
+# Hidden=true のみの上書きファイルは、同名の本物のdesktop IDを隠す
+# (同じファイル名なら~/.local/shareが先に読まれるため) 一方で、それ自体が
+# 「名前・Exec・Categoriesがすべて空のアプリ」として読み込まれ、どのカテゴリ
+# にも属さないため、メニューの「その他」(apps-dir-Other) に空項目として
+# 現れていた (Live: 2個、Installed: 3個)。上書きファイルにNoDisplay=trueを
+# 併記すると、jgmenu-appsはこの項目を表示対象から外す (同名のdesktop IDを
+# 隠す効果は変わらない)。Hidden=trueは、Hiddenを解釈する他のXDG対応
+# プログラム向けの正式なキーとして残す。
+#
 # 起動モード判定は既存の mypocketos-boot-mode(1) をそのまま再利用する
 # (Normal Live / Persistence / Installed / Unknown の4状態)。新規の
 # Live/Installed判定ロジックはここでは作らない。
@@ -123,7 +137,7 @@ DESKTOP_ID_INSTALL_DEBIAN='calamares-install-debian.desktop'
 MODE_OVERRIDE="${1:-}"
 
 expected_content() {
-	printf '[Desktop Entry]\nHidden=true\n%s\n' "${MANAGED_MARKER}"
+	printf '[Desktop Entry]\nHidden=true\nNoDisplay=true\n%s\n' "${MANAGED_MARKER}"
 }
 
 # 対象ファイルが「MyPocketOSが作成・管理しているもの」かどうかを判定する。

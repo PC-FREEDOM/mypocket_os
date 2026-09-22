@@ -1,0 +1,3 @@
+Package: systemsettings
+Pin: version *
+Pin-Priority: -1
