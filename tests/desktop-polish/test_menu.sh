@@ -11,6 +11,7 @@ TINT2RC="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/tint2/tint2rc"
 APPEND_CSV="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/jgmenu/append.csv"
 MENU_XML="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/openbox/menu.xml"
 RC_XML="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/openbox/rc.xml"
+MENU_OVERRIDE_DIR="${REPO_ROOT}/config/includes.chroot/usr/local/share/applications"
 
 PASS=0
 FAIL=0
@@ -314,6 +315,37 @@ for key, direction in expected.items():
     d = actions[0].find('ob:direction', ns)
     assert d is not None and d.text.strip() == direction, (key, d)
 "
+
+
+#==========================
+# MyPocketOS メニュー非表示オーバーライド
+#==========================
+# Debianパッケージ本体の.desktopは変更せず、/usr/local/share/applications
+# に同じdesktop IDの上書きを置く。jgmenu-appsは/usr/local/shareを
+# /usr/shareより先に読むため、NoDisplay=trueで内部・重複項目を
+# MyPocketOS全体のアプリメニューから隠す。
+for id in \
+	conky.desktop \
+	org.fcitx.Fcitx5.desktop \
+	jgmenu.desktop \
+	tint2.desktop \
+	org.fcitx.fcitx5-migrator.desktop \
+	im-config.desktop \
+	pcmanfm-desktop-pref.desktop \
+	org.xfce.mousepad-settings.desktop
+do
+	f="${MENU_OVERRIDE_DIR}/${id}"
+
+	check "menu override exists: ${id}" test -f "${f}"
+	check "menu override ${id}: Type=Application" \
+		grep -qxF 'Type=Application' "${f}"
+	check "menu override ${id}: Hidden=true" \
+		grep -qxF 'Hidden=true' "${f}"
+	check "menu override ${id}: NoDisplay=true" \
+		grep -qxF 'NoDisplay=true' "${f}"
+	check "menu override ${id}: MyPocketOS managed marker" \
+		grep -qxF 'X-MyPocketOS-Managed=true' "${f}"
+done
 
 echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"
 [ "${FAIL}" -eq 0 ]

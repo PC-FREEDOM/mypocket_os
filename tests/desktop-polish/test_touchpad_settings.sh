@@ -100,7 +100,15 @@ root="$1"
 files="$(find "$root" -type f -iname "*.desktop" -printf "%P\n" 2>/dev/null | sort)"
 expected="$(printf "%s\n" \
 "usr/share/applications/calamares-install-debian.desktop" \
-"usr/share/applications/mypocketos-touchpad-settings.desktop" | sort)"
+"usr/share/applications/mypocketos-touchpad-settings.desktop" \
+"usr/local/share/applications/conky.desktop" \
+"usr/local/share/applications/im-config.desktop" \
+"usr/local/share/applications/jgmenu.desktop" \
+"usr/local/share/applications/org.fcitx.Fcitx5.desktop" \
+"usr/local/share/applications/org.fcitx.fcitx5-migrator.desktop" \
+"usr/local/share/applications/org.xfce.mousepad-settings.desktop" \
+"usr/local/share/applications/pcmanfm-desktop-pref.desktop" \
+"usr/local/share/applications/tint2.desktop" | sort)"
 [ "$files" = "$expected" ]' _ "${REPO_ROOT}/config/includes.chroot"
 check "existing append.csv entries (永続領域を作成 etc.) are still intact" \
 	grep -q '永続領域を作成' "${APPEND_CSV}"

@@ -22,6 +22,19 @@
 # (calamares.desktop / calamares.desktop.orig / calamares-install-debian
 # .desktop) に対する挙動を検証する。
 #
+# 2026-09-22、jgmenuの「その他」カテゴリに空項目が現れる問題の原因が、
+# 上書きファイルの内容 (Hidden=trueのみ) であることが判明した。jgmenu-apps
+# (csv_cmd=apps) はHiddenを解釈せず、NoDisplay=trueかTryExec不在の場合だけ
+# 項目を表示対象から外す (jgmenu 4.5.0 src/desktop.c・jgmenu-apps.c)。
+# Hidden=trueのみの上書きファイルは、名前もExecもCategoriesも空のアプリ
+# としてどのカテゴリにも属さず、「その他」に空項目として残っていた。
+# 上書きファイルはHidden=trueにNoDisplay=trueを併記する内容とし、本テストは
+# その内容と、jgmenu-appsの表示対象から外れることを確認する。
+# 実際のjgmenu-appsバイナリが利用できる環境 (/usr/lib/jgmenu/jgmenu-apps、
+# または環境変数 JGMENU_APPS で指定) では実際に実行して確認し、無い環境
+# (CI等) ではその項目のみ省略して、jgmenu-appsの除外条件を再現した静的な
+# 確認だけを行う。
+#
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -61,7 +74,7 @@ new_home() {
 }
 
 expected_managed_content() {
-	printf '[Desktop Entry]\nHidden=true\nX-MyPocketOS-Managed=true'
+	printf '[Desktop Entry]\nHidden=true\nNoDisplay=true\nX-MyPocketOS-Managed=true'
 }
 
 check "production script exists" test -f "${SCRIPT}"
@@ -75,11 +88,11 @@ h1="$(new_home)"
 HOME="$h1" "${SCRIPT}" "Normal Live"
 check "Normal Live: calamares.desktop Hidden override is created" \
 	test -f "$(target_path "$h1" "${DESKTOP_ID_PLAIN}")"
-check "Normal Live: calamares.desktop content is Hidden=true + managed marker" \
+check "Normal Live: calamares.desktop content is Hidden=true + NoDisplay=true + managed marker" \
 	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h1" "${DESKTOP_ID_PLAIN}")" "$(expected_managed_content)"
 check "Normal Live: calamares.desktop.orig Hidden override is created" \
 	test -f "$(target_path "$h1" "${DESKTOP_ID_ORIG}")"
-check "Normal Live: calamares.desktop.orig content is Hidden=true + managed marker" \
+check "Normal Live: calamares.desktop.orig content is Hidden=true + NoDisplay=true + managed marker" \
 	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h1" "${DESKTOP_ID_ORIG}")" "$(expected_managed_content)"
 check "Normal Live: calamares-install-debian.desktop Hidden override does NOT exist (installer stays visible)" \
 	sh -c '[ ! -e "$1" ]' _ "$(target_path "$h1" "${DESKTOP_ID_INSTALL_DEBIAN}")"
@@ -107,7 +120,7 @@ check "Installed: calamares.desktop.orig Hidden override is created" \
 	test -f "$(target_path "$h3" "${DESKTOP_ID_ORIG}")"
 check "Installed: calamares-install-debian.desktop Hidden override is created" \
 	test -f "$(target_path "$h3" "${DESKTOP_ID_INSTALL_DEBIAN}")"
-check "Installed: calamares-install-debian.desktop content is Hidden=true + managed marker" \
+check "Installed: calamares-install-debian.desktop content is Hidden=true + NoDisplay=true + managed marker" \
 	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h3" "${DESKTOP_ID_INSTALL_DEBIAN}")" "$(expected_managed_content)"
 
 #==========================
@@ -257,6 +270,121 @@ check "HOME is a symlink: exits without writing through it" \
 h13="$(new_home)"
 check "mypocketos-boot-mode unavailable (broken PATH): falls back to Unknown, no-op" \
 	sh -c 'PATH=/nonexistent HOME="$1" "$2" >/dev/null 2>&1; [ ! -e "$1/.local/share/applications" ]' _ "${h13}" "${SCRIPT}"
+
+#==========================
+# 16b. 上書きファイルのNoDisplay=true (jgmenuの「その他」に空項目を出さない)
+#==========================
+# Normal Live (2個) と Installed (3個) の全上書きファイルについて、
+# Hidden=trueとNoDisplay=trueの両方を持つこと。
+for pair in "h1:Normal Live" "h3:Installed"; do
+	var="${pair%%:*}"
+	label="${pair#*:}"
+	eval "hd=\${$var}"
+	for id in "${DESKTOP_ID_PLAIN}" "${DESKTOP_ID_ORIG}" "${DESKTOP_ID_INSTALL_DEBIAN}"; do
+		f="$(target_path "${hd}" "${id}")"
+		[ -f "${f}" ] || continue
+		check "${label}: ${id} override has NoDisplay=true" \
+			grep -qxF 'NoDisplay=true' "${f}"
+		check "${label}: ${id} override keeps Hidden=true" \
+			grep -qxF 'Hidden=true' "${f}"
+	done
+done
+
+# jgmenu-apps (jgmenu 4.5.0 desktop.c・jgmenu-apps.c) の除外条件の再現:
+# [Desktop Entry]節のNoDisplayの値がtrue (大文字小文字を区別しない) であれば、
+# 項目は表示対象から外れる。Hiddenは無視される。
+check "jgmenu-apps rule: every override file is excluded from display (NoDisplay=true in [Desktop Entry])" \
+	python3 -c "
+import glob, sys
+files = glob.glob('${h1}/.local/share/applications/*') + glob.glob('${h3}/.local/share/applications/*')
+assert len(files) == 5, files
+for f in files:
+    in_entry = False; nodisplay = False
+    for line in open(f, encoding='utf-8').read().splitlines():
+        if line.startswith('['):
+            in_entry = line.startswith('[Desktop Entry]')
+        elif in_entry and '=' in line:
+            k, v = line.split('=', 1)
+            if k == 'NoDisplay' and v.lower() == 'true':
+                nodisplay = True
+    assert nodisplay, f
+"
+
+#==========================
+# 16c. 古い内容 (Hidden=trueのみ) のMyPocketOS管理ファイルは、次回起動時に
+#      新しい内容へ更新される (既存の「管理対象で内容が古い場合は更新」)
+#==========================
+legacy_content() {
+	printf '[Desktop Entry]\nHidden=true\nX-MyPocketOS-Managed=true\n'
+}
+h14="$(new_home)"
+mkdir -p "${h14}/.local/share/applications"
+for id in "${DESKTOP_ID_PLAIN}" "${DESKTOP_ID_ORIG}" "${DESKTOP_ID_INSTALL_DEBIAN}"; do
+	legacy_content >"$(target_path "$h14" "${id}")"
+done
+HOME="$h14" "${SCRIPT}" Installed
+check "legacy managed calamares.desktop (no NoDisplay) is updated to the new content" \
+	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h14" "${DESKTOP_ID_PLAIN}")" "$(expected_managed_content)"
+check "legacy managed calamares.desktop.orig (no NoDisplay) is updated to the new content" \
+	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h14" "${DESKTOP_ID_ORIG}")" "$(expected_managed_content)"
+check "legacy managed calamares-install-debian.desktop (no NoDisplay) is updated to the new content" \
+	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h14" "${DESKTOP_ID_INSTALL_DEBIAN}")" "$(expected_managed_content)"
+
+# Live/Persistenceで起動した場合も、古いcalamares.desktop/.origは更新される。
+h15="$(new_home)"
+mkdir -p "${h15}/.local/share/applications"
+legacy_content >"$(target_path "$h15" "${DESKTOP_ID_PLAIN}")"
+legacy_content >"$(target_path "$h15" "${DESKTOP_ID_ORIG}")"
+HOME="$h15" "${SCRIPT}" "Normal Live"
+check "Normal Live: legacy managed calamares.desktop is updated to the new content" \
+	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h15" "${DESKTOP_ID_PLAIN}")" "$(expected_managed_content)"
+check "Normal Live: legacy managed calamares.desktop.orig is updated to the new content" \
+	sh -c '[ "$(cat "$1")" = "$2" ]' _ "$(target_path "$h15" "${DESKTOP_ID_ORIG}")" "$(expected_managed_content)"
+
+#==========================
+# 16d. 実際のjgmenu-appsで、上書きファイルが「その他」に空項目を作らず、
+#      同名のdesktop IDだけを隠すことを確認する (バイナリがある環境のみ)
+#==========================
+JGMENU_APPS_BIN="${JGMENU_APPS:-}"
+if [ -z "${JGMENU_APPS_BIN}" ] && [ -x /usr/lib/jgmenu/jgmenu-apps ]; then
+	JGMENU_APPS_BIN=/usr/lib/jgmenu/jgmenu-apps
+fi
+if [ -n "${JGMENU_APPS_BIN}" ] && [ -x "${JGMENU_APPS_BIN}" ]; then
+	# 仮のシステム側desktop IDを用意する (名前は他と衝突しない固有の文字列)。
+	sysdir="${TMPDIR}/sysdata"
+	mkdir -p "${sysdir}/applications"
+	for id in "${DESKTOP_ID_ORIG}" "${DESKTOP_ID_INSTALL_DEBIAN}"; do
+		printf '[Desktop Entry]\nType=Application\nName=MPOSTEST %s\nExec=true\nCategories=System;\n' "${id}" \
+			>"${sysdir}/applications/${id}"
+	done
+	run_apps() {
+		env -u XDG_DATA_HOME HOME="$1" XDG_DATA_DIRS="${sysdir}" LANG=C LC_ALL=C \
+			"${JGMENU_APPS_BIN}" 2>/dev/null
+	}
+	run_apps "$h1" >"${TMPDIR}/apps_live.csv" || true
+	run_apps "$h3" >"${TMPDIR}/apps_installed.csv" || true
+	empty_home="$(new_home)"
+	run_apps "${empty_home}" >"${TMPDIR}/apps_none.csv" || true
+
+	check "jgmenu-apps ran and produced the top-level category list (sanity)" \
+		grep -q '^Accessories,' "${TMPDIR}/apps_none.csv"
+	check "jgmenu-apps (no override): both fake system desktop IDs are listed (sanity)" \
+		sh -c '[ "$(grep -c "MPOSTEST" "$1")" -eq 2 ]' _ "${TMPDIR}/apps_none.csv"
+	check "jgmenu-apps (Normal Live): override files create no blank (nameless) menu entries" \
+		sh -c '! grep -q "^\"\"\"\"\"\"," "$1"' _ "${TMPDIR}/apps_live.csv"
+	check "jgmenu-apps (Normal Live): calamares.desktop.orig is hidden" \
+		sh -c '! grep -q "MPOSTEST ${2}" "$1"' _ "${TMPDIR}/apps_live.csv" "${DESKTOP_ID_ORIG}"
+	check "jgmenu-apps (Normal Live): calamares-install-debian.desktop stays visible" \
+		grep -q "MPOSTEST ${DESKTOP_ID_INSTALL_DEBIAN}" "${TMPDIR}/apps_live.csv"
+	check "jgmenu-apps (Installed): override files create no blank (nameless) menu entries" \
+		sh -c '! grep -q "^\"\"\"\"\"\"," "$1"' _ "${TMPDIR}/apps_installed.csv"
+	check "jgmenu-apps (Installed): calamares.desktop.orig is hidden" \
+		sh -c '! grep -q "MPOSTEST ${2}" "$1"' _ "${TMPDIR}/apps_installed.csv" "${DESKTOP_ID_ORIG}"
+	check "jgmenu-apps (Installed): calamares-install-debian.desktop is hidden" \
+		sh -c '! grep -q "MPOSTEST ${2}" "$1"' _ "${TMPDIR}/apps_installed.csv" "${DESKTOP_ID_INSTALL_DEBIAN}"
+else
+	echo "SKIP: jgmenu-apps binary not found (set JGMENU_APPS or install jgmenu); real jgmenu-apps checks omitted" >&2
+fi
 
 #==========================
 # 17. autostartからの呼び出しは1回のみ

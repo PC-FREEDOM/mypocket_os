@@ -9,6 +9,7 @@ set -eu
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 COMMON_LIST="${REPO_ROOT}/config/package-lists.d/mypocketos-common.list.chroot"
 STANDARD_LIST="${REPO_ROOT}/config/package-lists.d/mypocketos-standard.list.chroot"
+SYSTEMSETTINGS_PREF="${REPO_ROOT}/config/apt/99-mypocketos-no-systemsettings.pref"
 
 PASS=0
 FAIL=0
@@ -85,6 +86,28 @@ check "no flatpakrepo file added under config/includes.chroot" \
 	sh -c '! find "$1/config/includes.chroot" -iname "*.flatpakrepo" 2>/dev/null | grep -q .' _ "${REPO_ROOT}"
 check "no hook performs flatpak remote-add (system-wide auto-registration)" \
 	sh -c '! grep -rl "remote-add" "$1/config/hooks" 2>/dev/null | grep -q .' _ "${REPO_ROOT}"
+
+
+# ---- KDE systemsettings を推奨依存から除外する -------------------------------
+# kio6 は必要だが、systemsettings は Recommends として入るだけで、
+# Openbox ベースの MyPocketOS では不要なため個別にAPT pinで除外する。
+check "systemsettings apt preference exists" \
+	test -f "${SYSTEMSETTINGS_PREF}"
+
+check "systemsettings apt preference targets only systemsettings" \
+	grep -qxF 'Package: systemsettings' "${SYSTEMSETTINGS_PREF}"
+
+check "systemsettings apt preference pins all versions" \
+	grep -qxF 'Pin: version *' "${SYSTEMSETTINGS_PREF}"
+
+check "systemsettings apt preference has negative priority" \
+	grep -qxF 'Pin-Priority: -1' "${SYSTEMSETTINGS_PREF}"
+
+check "systemsettings is not explicitly listed in common packages" \
+	sh -c '! grep -qx "systemsettings" "$1"' _ "${COMMON_LIST}"
+
+check "systemsettings is not explicitly listed in standard packages" \
+	sh -c '! grep -qx "systemsettings" "$1"' _ "${STANDARD_LIST}"
 
 echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"
 [ "${FAIL}" -eq 0 ]
