@@ -148,6 +148,20 @@ fi
 # あることを示している。dispatcher再起動はネットワーク接続確立後にのみ
 # 発火するため、Conky自身の内部初期化以外に待つべき理由はないと判断し、
 # `-p`を`1`から`0`(pauseなし)へさらに短縮する。
+#
+# 追記 (2026-09-22、実機Legacy BIOS環境・USB Wi-Fiアダプタ
+# (wlx0090fee6a5f7) での不具合修正): NetworkManagerのdispatcher
+# "up"イベントは、接続のactivated確定・default route確定より前に発火
+# する場合があることが実機ログで確認された(本dispatcher起動・Conky
+# 再起動の後にactivated/default routeが確定していた)。この場合、Down/Up
+# の取得元である${gw_iface}がConky再起動時点でまだ確定しておらず、
+# 3度目の修正時と同様にDown/Upが0Bのまま変化しない状態になる。
+# 実機で、本コマンドの直前に2秒待機を挟んでWi-Fi切断→再接続したところ
+# 正常動作を確認できたため、固定の2秒待機を追加する(dispatcherには
+# 「default routeが確定した」ことを待ち合わせる非同期の通知手段が無い
+# ため、ポーリングではなく固定待機とする)。
+sleep 2
+
 set -- "$@" conky -p 0 -U
 
 runuser -u "${LIVE_USER}" -- "$@" >/dev/null 2>&1 &

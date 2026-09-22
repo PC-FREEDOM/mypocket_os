@@ -89,6 +89,22 @@ check "waits for the old process to actually exit before relaunching (bounded lo
 	sh -c 'grep -qF "kill -0" "$1" && grep -qE "while \[ \"\\\$\{?i\}?\" -lt [0-9]+ \]" "$1"' _ "${DISPATCHER}"
 check "relaunches conky with -U (unique) and no startup pause (-p 0, intentionally shorter than autostart's -p 3; see 2026-09-11 comments)" \
 	grep -qF 'set -- "$@" conky -p 0 -U' "${DISPATCHER}"
+
+# 6commit目 (2026-09-22): 実機Legacy BIOS環境・USB Wi-Fiアダプタで、
+# dispatcherの"up"イベントがactivated/default route確定より前に発火し、
+# Conky再起動時点で${gw_iface}が未確定のままDown/Upが0Bに固定される
+# 不具合が確認された。再起動直前に固定2秒待機を追加することで解消した
+# (実機確認済み)。
+check "waits 2 seconds (fixed) immediately before restarting conky (2026-09-22 fix)" \
+	grep -qx 'sleep 2' "${DISPATCHER}"
+check "the 2-second wait is positioned after the old process is killed and before the relaunch (correct ordering)" \
+	sh -c '
+		kill_line=$(grep -n "kill \"\${CONKY_PID}\"" "$1" | head -n1 | cut -d: -f1)
+		sleep_line=$(grep -nx "sleep 2" "$1" | head -n1 | cut -d: -f1)
+		restart_line=$(grep -nF "set -- \"\$@\" conky -p 0 -U" "$1" | head -n1 | cut -d: -f1)
+		[ -n "${kill_line}" ] && [ -n "${sleep_line}" ] && [ -n "${restart_line}" ] &&
+			[ "${kill_line}" -lt "${sleep_line}" ] && [ "${sleep_line}" -lt "${restart_line}" ]
+	' _ "${DISPATCHER}"
 check "the relaunch invocation itself no longer uses the old -p 3 (historical mentions of -p 3 in comments are unaffected)" \
 	sh -c '! grep -qF "set -- \"\$@\" conky -p 3 -U" "$1"' _ "${DISPATCHER}"
 check "the relaunch invocation itself no longer uses the intermediate -p 1 (historical mentions of -p 1 in comments are unaffected)" \
@@ -152,9 +168,16 @@ EOF
 
 	# dispatcherは実機での挙動どおりrunuser呼び出しをバックグラウンドで
 	# 起動してから即座に終了する (NetworkManagerのイベント処理を
-	# ブロックしないため)。そのため、このテストの側で、バックグラウンド
-	# 実行されたモックrunuserが実際に書き込みを終えるまで、短時間
-	# (最大2秒) 待ってから結果を確認する。
+	# ブロックしないため)。2026-09-22の修正により、action=up・conky稼働中・
+	# DISPLAY取得済みの経路では、runuserを起動する直前に固定2秒のsleepを
+	# 挟むが、これは"${DISPATCHER}"呼び出し自体の中で(バックグラウンド化
+	# する前に)同期的に発生するため、上の"${DISPATCHER}"呼び出しが戻って
+	# きた時点で既に2秒分は経過済みである。そのため、このテスト側で
+	# バックグラウンド実行されたモックrunuserの書き込みを待つ時間自体は、
+	# 修正前と同じ短い上限(最大2秒)のままでよい。
+	# (runuserが呼ばれないことを期待するシナリオでは、この上限までは
+	# 必ず待つため、上限を不必要に延ばすとそれらのシナリオが無駄に遅く
+	# なる点に注意する)。
 	i=0
 	while [ "${i}" -lt 20 ]; do
 		[ -s "${RUNUSER_CALLS}" ] && break
@@ -264,6 +287,24 @@ check "scenario5: runuser call does not include a LANG entry (none was present t
 check "scenario5: runuser call does not include an XDG_RUNTIME_DIR entry (none was present to carry over)" \
 	sh -c '! grep -q "XDG_RUNTIME_DIR=" "$1"' _ "${RUNUSER_CALLS}"
 kill "${PID5}" 2>/dev/null || true
+wait 2>/dev/null || true
+
+# シナリオ6 (2026-09-22): action=up・対象プロセスあり・DISPLAY取得済みの
+# 経路で、runuser (conky再起動) の呼び出しが実際に約2秒後まで行われない
+# ことを計測して確認する。文字列としてsleep 2が存在するだけでなく、
+# 実際にその待機が効いていることを確認するためのテスト。
+make_target_process DISPLAY=:100
+PID6="${LAST_TARGET_PID}"
+START_NS="$(date +%s%N)"
+run_dispatcher "${PID6}" "up"
+END_NS="$(date +%s%N)"
+ELAPSED_MS=$(( (END_NS - START_NS) / 1000000 ))
+check "scenario6: runuser was called (sanity check for the timing assertion below)" \
+	sh -c '[ -s "$1" ]' _ "${RUNUSER_CALLS}"
+# スケジューリングの揺らぎを見込み、下限は2000msよりやや緩めの1800msとする。
+check "scenario6: the restart is delayed by roughly the fixed 2-second wait (>= 1800ms elapsed)" \
+	sh -c '[ "$1" -ge 1800 ]' _ "${ELAPSED_MS}"
+kill "${PID6}" 2>/dev/null || true
 wait 2>/dev/null || true
 
 echo "SCENARIOS=$((PASS + FAIL)) PASS=${PASS} FAIL=${FAIL}"
