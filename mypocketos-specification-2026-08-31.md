@@ -1224,7 +1224,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | 最低RAM | ⬜ |
 | 最終ISO容量・USB要件(Persistence IMGは配布しないため対象外) | ⬜ |
 | 通常インストール最終確認 | ✅ 正式機能として確定。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理USB実機・**Legacy BIOS物理実機(2026-09-20)**で確認済み(10.1.6節参照)。Secure Boot有効環境でのLive USB起動は物理実機確認済み(2026-09-20)、Secure Boot有効状態でのCalamaresインストール完走・installed system起動も物理UEFI実機で確認済み(2026-09-21、10.1.4節参照) |
-| License / Known Issues / Release Notes | ⬜ |
+| License / Known Issues / Release Notes | ✅ `LICENSE`・`RELEASE_NOTES.md`・`KNOWN_ISSUES.md`・`THIRD_PARTY_NOTICES.md`をmainへ追加済み |
 | 最終SHA-256 | ⬜ |
 
 ---
