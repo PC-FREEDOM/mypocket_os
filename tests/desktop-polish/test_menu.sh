@@ -12,6 +12,7 @@ APPEND_CSV="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/jgmenu/append.c
 MENU_XML="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/openbox/menu.xml"
 RC_XML="${REPO_ROOT}/config/includes.chroot/etc/skel/.config/openbox/rc.xml"
 MENU_OVERRIDE_DIR="${REPO_ROOT}/config/includes.chroot/usr/local/share/applications"
+MENU_ICON="${REPO_ROOT}/config/includes.chroot/usr/share/pixmaps/mypocketos-menu.png"
 
 PASS=0
 FAIL=0
@@ -27,7 +28,18 @@ check() {
 	fi
 }
 
-# tint2側の既存コマンドが維持されていること (今回変更していない)
+# tint2メニューボタンのMyPocketOSブランド表示
+check "menu button icon exists" test -f "${MENU_ICON}"
+check "tint2 menu button uses MyPocketOS icon" \
+	grep -qx 'button_icon = /usr/share/pixmaps/mypocketos-menu.png' "${TINT2RC}"
+check "tint2 menu button icon size is 20px" \
+	grep -qx 'button_max_icon_size = 20' "${TINT2RC}"
+check "tint2 menu button keeps Japanese text label" \
+	grep -qx 'button_text = メニュー' "${TINT2RC}"
+check "tint2 menu button tooltip is branded" \
+	grep -qx 'button_tooltip = MyPocketOS メニュー' "${TINT2RC}"
+
+# tint2側の既存コマンドが維持されていること
 check "tint2 button_lclick_command is unchanged (jgmenu_run)" \
 	grep -qx 'button_lclick_command = jgmenu_run' "${TINT2RC}"
 
