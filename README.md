@@ -197,11 +197,18 @@ VM・実機いずれのNormal Live環境でも`flatpak --version`(Flatpak 1.16.6
 remote設定・アプリ設定/データが、いずれも`/home` Persistenceで保持
 されることを実機E2Eで確認済みである。
 
-**ISOサイズ**
+**ISOサイズ・SHA-256(初回リリース確定値)**
 
-初回リリースで公開するBase版・Standard版の最終サイズは、
-リリース用確定コミットから両editionを再ビルドした後に測定し、
-Release NotesおよびSHA-256とあわせて記録します。
+初回リリースの確定コミット `cde6547` からBase版・Standard版をビルドした
+最終ISOのサイズとSHA-256は以下のとおりです。
+
+| edition | ISO | サイズ | SHA-256 |
+|---|---|---|---|
+| Base | `mypocketos-base-amd64.hybrid.iso` | 約1.38 GiB (1,478,590,464 bytes) | `1190cc49e7b98dabd4d1767eac68cbeac21be6fb5765312f3069ddd6f51d03a0` |
+| Standard | `mypocketos-standard-amd64.hybrid.iso` | 約1.70 GiB (1,828,716,544 bytes) | `e2e47fbe826aaa430d602de31afd74d01a0746038c6baa97a670172377ba08ea` |
+
+上記2ファイルのSHA-256は、ISO本体と同様`SHA256SUMS`としてGitHub Release
+へ添付する(ISO本体・`SHA256SUMS`ともにGitでは管理しない)。
 
 参考として、Flatpak標準搭載前の過去ビルドでは次の値でした。
 これらは**現在のリリース候補ISOのサイズではありません。**
@@ -210,8 +217,6 @@ Release NotesおよびSHA-256とあわせて記録します。
 |---|---|---|
 | Base | `mypocketos-base-amd64.hybrid.iso` | 約1.33 GiB (1,428,750,336 bytes) |
 | Standard | `mypocketos-standard-amd64.hybrid.iso` | 約1.67 GiB (1,788,149,760 bytes) |
-
-最終的なISOサイズとSHA-256は、リリース前の最終ビルド後に確定します。
 
 ### アイコンテーマ (MyPocketOS-Fluent-yellow)
 
