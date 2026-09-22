@@ -719,6 +719,17 @@ BIOS/UEFIいずれのファームウェアモードによるものかは記録�
 Wi-Fi Persistence確認、および未署名バイナリ拒否によるSecure Boot
 enforcementの実証は、引き続き未確認のまま残っている。
 
+**2026-09-22決定(配布方針)**: 本節の`scripts/build-usb-persistence-image.sh`
+が生成するIMGファイル(あらかじめPersistence領域を組み込んだ単一USB用IMG)
+は、初回リリースの正式な配布物には含めない。初回リリースでPersistenceを
+利用する正式な経路は、配布するBase／StandardのISOをUSBへ書き込んだ上で、
+Live環境上のGUI(`mypocketos-persistence-setup`。8.2〜8.4節参照)を用いて
+利用者自身がPersistence領域を作成する方法である。本節のIMG生成スクリプト
+は、1本のUSBメモリで起動と永続化を両立させる構成の開発・検証用ツールと
+いう位置付けであり、Persistence機能自体を初回リリースで提供しないという
+意味ではない(Persistence機能は上記の正式経路で提供する)。配布物としての
+再検討は将来のリリースで行う可能性がある(8.7節参照)。
+
 ## 8.7 将来候補
 
 - LUKS暗号化
@@ -1112,7 +1123,8 @@ Fluent archive：
   認証情報 (PSK等) も無暗号化のまま読み取られ得ることを利用者へ明示する
   (8.1節)
 - 保存範囲を実装済み仕様に合わせて正確に説明
-- ISO／IMGへSHA-256を提供
+- 配布するBase／StandardのISOへSHA-256を提供する(Persistence IMGは
+  初回リリースでは配布しないため対象外。8.6節・16.3節参照)
 - 未実施の確認を「確認済み」と記載しない
 
 ---
@@ -1134,7 +1146,8 @@ commit:     e5f5e162928f8de36ffca6eaa9dd72aad142b83d
 - Wi-Fi／NetworkManager設定のPersistence (Mode B・USB persistence IMG経由は実機確認済み、他経路は確認前)
 - Mode A
 - Mode B
-- USB persistence IMG
+- USB persistence IMG生成スクリプト(開発・検証用。初回リリースでは
+  配布しない。8.6節参照)
 - MyPocketOS icon theme
 - pasystray独自音量SVG
 - Conky起動モード
@@ -1176,7 +1189,8 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 
 ## 16.3 配布仕様
 
-- Persistence IMG容量最終決定
+- ~~Persistence IMG容量最終決定~~ → 2026-09-22、Persistence IMGは初回
+  リリースでは配布しないことを決定したため対象外(8.6節参照)
 - 最小／推奨USB容量
 - 最終ISO容量
 - Release Notes
@@ -1184,7 +1198,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - ライセンス／third-party attribution
 - USB書き込み手順
 - Persistence説明
-- 最終ISO/IMG SHA-256
+- 最終ISO SHA-256(Persistence IMGは配布しないため対象外)
 
 ---
 
@@ -1208,9 +1222,9 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | Persistence作成済みUSBのUEFI | ⬜ |
 | Secure Boot | ✅ Live USB起動は物理UEFI実機のSecure Boot有効環境で確認済み(2026-09-20、Standard ISO)。Calamaresインストール完走・installed system起動も同環境の物理実機で確認済み(2026-09-21、Standard ISO、10.1.4節参照)。確認した実機での結果であり、全機種での動作保証ではない |
 | 最低RAM | ⬜ |
-| ISO／IMG容量・USB要件 | ⬜ |
+| 最終ISO容量・USB要件(Persistence IMGは配布しないため対象外) | ⬜ |
 | 通常インストール最終確認 | ✅ 正式機能として確定。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理USB実機・**Legacy BIOS物理実機(2026-09-20)**で確認済み(10.1.6節参照)。Secure Boot有効環境でのLive USB起動は物理実機確認済み(2026-09-20)、Secure Boot有効状態でのCalamaresインストール完走・installed system起動も物理UEFI実機で確認済み(2026-09-21、10.1.4節参照) |
-| License / Known Issues / Release Notes | ⬜ |
+| License / Known Issues / Release Notes | ✅ `LICENSE`・`RELEASE_NOTES.md`・`KNOWN_ISSUES.md`・`THIRD_PARTY_NOTICES.md`をmainへ追加済み |
 | 最終SHA-256 | ⬜ |
 
 ---
