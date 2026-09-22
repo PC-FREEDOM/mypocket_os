@@ -199,13 +199,14 @@ remote設定・アプリ設定/データが、いずれも`/home` Persistenceで
 
 **ISOサイズ・SHA-256(初回リリース確定値)**
 
-初回リリースの確定コミット `cde6547` からBase版・Standard版をビルドした
-最終ISOのサイズとSHA-256は以下のとおりです。
+初回リリースの確定コミット `41cbb23`(ConkyのNetworkManager dispatcher
+修正を含む)からBase版・Standard版をビルドした最終ISOのサイズとSHA-256は
+以下のとおりです。
 
 | edition | ISO | サイズ | SHA-256 |
 |---|---|---|---|
-| Base | `mypocketos-base-amd64.hybrid.iso` | 約1.38 GiB (1,478,590,464 bytes) | `1190cc49e7b98dabd4d1767eac68cbeac21be6fb5765312f3069ddd6f51d03a0` |
-| Standard | `mypocketos-standard-amd64.hybrid.iso` | 約1.70 GiB (1,828,716,544 bytes) | `e2e47fbe826aaa430d602de31afd74d01a0746038c6baa97a670172377ba08ea` |
+| Base | `mypocketos-base-amd64.hybrid.iso` | 約1.38 GiB (1,478,590,464 bytes) | `e9d046d508ff3ea42b3eafb98ea53c0df8950a1cce7c5a0ecf227bc09485273a` |
+| Standard | `mypocketos-standard-amd64.hybrid.iso` | 約1.70 GiB (1,828,716,544 bytes) | `5cce2fd169d904e961de135122f447454f23a4ab0902714f590944ab2b688f21` |
 
 上記2ファイルのSHA-256は、ISO本体と同様`SHA256SUMS`としてGitHub Release
 へ添付する(ISO本体・`SHA256SUMS`ともにGitでは管理しない)。
