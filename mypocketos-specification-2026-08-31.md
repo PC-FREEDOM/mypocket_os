@@ -101,8 +101,9 @@ MyPocketOSはDebian StableとOpenboxを基盤にした軽量ポータブルLinux
 | 日本語入力 | Fcitx5＋Mozc | 実装済み |
 | 最小USB容量 | 16GB | 暫定確定 |
 | 推奨USB容量 | 32GB以上 | 推奨値 |
-| 内蔵インストール容量 | 8GB以上 | 暫定推奨 |
-| 最低RAM | 固定条件で実測後に確定 | 未確定 |
+| 内蔵インストール容量 | 16 GiB以上 | Calamares要件 |
+| 最低RAM | 約2 GiB以上 | Calamares要件 |
+| インターネット接続 | Calamaresによる通常インストール時に必須 | Calamares要件 |
 
 注：同一USB Persistenceの実機E2Eには7.5GB USBを使用して成功しているが、公開時の最小USB容量表記は現時点では16GBのままとする。
 
