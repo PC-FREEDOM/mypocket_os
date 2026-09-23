@@ -103,10 +103,11 @@ MyPocketOSのプロジェクトコードはGNU General Public License Version 3
 
 ## ISO / SHA-256
 
-初回リリースの確定コミット `cde6547` からビルドした、Base版・Standard版の
-最終ISOサイズおよびSHA-256は以下のとおりです。
+初回リリースの確定コミット `41cbb23`(ConkyのNetworkManager dispatcher
+修正を含む)からビルドした、Base版・Standard版の最終ISOサイズおよび
+SHA-256は以下のとおりです。
 
 | edition | ファイル名 | サイズ (bytes) | SHA-256 |
 |---|---|---|---|
-| Base | `mypocketos-base-amd64.hybrid.iso` | 1,478,590,464 | `1190cc49e7b98dabd4d1767eac68cbeac21be6fb5765312f3069ddd6f51d03a0` |
-| Standard | `mypocketos-standard-amd64.hybrid.iso` | 1,828,716,544 | `e2e47fbe826aaa430d602de31afd74d01a0746038c6baa97a670172377ba08ea` |
+| Base | `mypocketos-base-amd64.hybrid.iso` | 1,478,590,464 | `e9d046d508ff3ea42b3eafb98ea53c0df8950a1cce7c5a0ecf227bc09485273a` |
+| Standard | `mypocketos-standard-amd64.hybrid.iso` | 1,828,716,544 | `5cce2fd169d904e961de135122f447454f23a4ab0902714f590944ab2b688f21` |

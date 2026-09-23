@@ -1134,7 +1134,7 @@ Fluent archive：
 ```text
 repository: PC-FREEDOM/mypocket_os
 branch:     main
-commit:     cde6547d00074d83059662f7b988d51ee9bf6521
+commit:     41cbb23452661d8b9f71a0888025b4c5cba49caf
 ```
 
 主な成立済み要素：
@@ -1192,7 +1192,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - ~~Persistence IMG容量最終決定~~ → 2026-09-22、Persistence IMGは初回
   リリースでは配布しないことを決定したため対象外(8.6節参照)
 - 最小／推奨USB容量
-- ~~最終ISO容量~~ → 確定コミット`cde6547`からのビルドにより確定
+- ~~最終ISO容量~~ → 確定コミット`41cbb23`からのビルドにより確定
   (Base 1,478,590,464 bytes・Standard 1,828,716,544 bytes、README.md
   「ISOサイズ・SHA-256(初回リリース確定値)」節参照)
 - Release Notes
@@ -1200,7 +1200,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 - ライセンス／third-party attribution
 - USB書き込み手順
 - Persistence説明
-- ~~最終ISO SHA-256~~ → 確定コミット`cde6547`からのビルドにより確定
+- ~~最終ISO SHA-256~~ → 確定コミット`41cbb23`からのビルドにより確定
   (README.md「ISOサイズ・SHA-256(初回リリース確定値)」節参照。ISO本体と
   同様`SHA256SUMS`としてGitHub Releaseへ添付し、Gitでは管理しない。
   Persistence IMGは配布しないため対象外)
@@ -1227,10 +1227,10 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | Persistence作成済みUSBのUEFI | ⬜ |
 | Secure Boot | ✅ Live USB起動は物理UEFI実機のSecure Boot有効環境で確認済み(2026-09-20、Standard ISO)。Calamaresインストール完走・installed system起動も同環境の物理実機で確認済み(2026-09-21、Standard ISO、10.1.4節参照)。確認した実機での結果であり、全機種での動作保証ではない |
 | 最低RAM | ⬜ |
-| 最終ISO容量・USB要件(Persistence IMGは配布しないため対象外) | ✅ 確定コミット`cde6547`からのビルドでISOサイズ確定(README.md参照)。USB容量は最小16GB／推奨32GB以上(RELEASE_NOTES.md参照) |
+| 最終ISO容量・USB要件(Persistence IMGは配布しないため対象外) | ✅ 確定コミット`41cbb23`からのビルドでISOサイズ確定(README.md参照)。USB容量は最小16GB／推奨32GB以上(RELEASE_NOTES.md参照) |
 | 通常インストール最終確認 | ✅ 正式機能として確定。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理USB実機・**Legacy BIOS物理実機(2026-09-20)**で確認済み(10.1.6節参照)。Secure Boot有効環境でのLive USB起動は物理実機確認済み(2026-09-20)、Secure Boot有効状態でのCalamaresインストール完走・installed system起動も物理UEFI実機で確認済み(2026-09-21、10.1.4節参照) |
 | License / Known Issues / Release Notes | ✅ `LICENSE`・`RELEASE_NOTES.md`・`KNOWN_ISSUES.md`・`THIRD_PARTY_NOTICES.md`をmainへ追加済み |
-| 最終SHA-256 | ✅ Base `1190cc49…`・Standard `e2e47fbe…`(README.md「ISOサイズ・SHA-256(初回リリース確定値)」節参照。`SHA256SUMS`はISO本体と同様GitHub Releaseへ添付し、Gitでは管理しない) |
+| 最終SHA-256 | ✅ Base `e9d046d5…`・Standard `5cce2fd1…`(README.md「ISOサイズ・SHA-256(初回リリース確定値)」節参照。`SHA256SUMS`はISO本体と同様GitHub Releaseへ添付し、Gitでは管理しない) |
 
 ---
 
