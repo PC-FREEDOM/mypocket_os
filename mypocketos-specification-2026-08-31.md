@@ -93,8 +93,8 @@ MyPocketOSはDebian StableとOpenboxを基盤にした軽量ポータブルLinux
 | ビルド基盤 | `live-build 20250505+deb13u1`系 | 実装済み |
 | イメージ形式 | ISO Hybrid | 実装済み |
 | Legacy BIOS | 対応 | 実USB検証済み |
-| 64-bit UEFI | 対応 | VM確認済み。物理UEFI実機でのLive USB起動を実機確認済み(2026-09-20、Standard ISO、Secure Boot有効環境を含む)。Persistence作成済みUSBでのUEFI起動は未確認(17節参照) |
-| Secure Boot | Live USB起動、およびCalamaresでインストールしたinstalled system起動に対応(確認した物理実機での結果。10.1.4節参照) | Live USB起動: 物理UEFI実機で実機確認済み(2026-09-20、Standard ISO)。Calamaresインストール完走・installed system起動: 物理UEFI実機で実機確認済み(2026-09-21、Standard ISO) |
+| 64-bit UEFI | 対応 | VM確認済み。物理UEFI実機でのLive USB起動を実機確認済み(2026-09-20、Standard ISO、Secure Boot有効環境を含む)。Persistence作成済みUSBでのUEFI起動も、2026-09-23に物理実機で確認済み(17節参照) |
+| Secure Boot | Live USB起動、およびCalamaresでインストールしたinstalled system起動に対応(確認した物理実機での結果。10.1.4節参照) | Live USB起動: 物理UEFI実機で実機確認済み(2026-09-20、Standard ISO)。Calamaresインストール完走・installed system起動: 物理UEFI実機で実機確認済み(2026-09-21、Standard ISO)。2026-09-23、ConkyのNetworkManager dispatcher修正を含む最終候補ISO(確定コミット`41cbb23`)でも、ブートメニュー表示からStandard版Liveデスクトップ到達までを同環境の物理実機で再確認し、日本語表示や基本UIに大きな崩れがないことも確認済み |
 | ロケール | `ja_JP.UTF-8` | 実装済み |
 | タイムゾーン | `Asia/Tokyo` | 実装済み |
 | キーボード | 日本語配列 | 実装済み |
@@ -298,6 +298,19 @@ Baseとの差：
 
 詳細な実装・固定幅の決定根拠はREADME「Conkyシステム情報パネル」節を
 参照。
+
+**2026-09-22実機不具合修正・2026-09-23実機確認**: Legacy BIOS物理実機
+(Core 2 Duo T9550、RAM 4GB)にUSB Wi-Fiアダプタを接続した環境で、Wi-Fi
+接続自体・NetworkManager接続・ping疎通・Firefoxでの実通信はいずれも
+正常であるにもかかわらず、ConkyのDown/Upが`0B`のまま更新されない不具合
+が確認された。原因は、NetworkManager dispatcherの`up`イベントが接続の
+activated・default route確定より前に発火する場合があり、Conky再起動
+時点で`${gw_iface}`が未確定のままになることであった。
+`01-mypocketos-conky-restart`で、既存Conkyプロセスをkillした後・
+再起動直前に固定2秒のsleepを追加する修正を行い(上記設計要件のとおり、
+新規のポーリング・常駐監視プロセスは追加していない)、初回リリースでは
+この修正を正式採用する。修正版Standard ISOで、同じ実機でのWi-Fi接続後、
+手動操作なしでConkyのDown/Upが自動更新されることを確認済み。
 
 ## 5.4 Window Snap仕様 (2026-09-12確定、PR #46)
 
@@ -970,6 +983,11 @@ system起動は、物理実機でエンドツーエンド確認済みである�
 ファームウェア(Secure Bootの鍵設定等)での動作を保証するものではない。
 また、Base editionでの同様の確認は行っていない。
 
+2026-09-23、ConkyのNetworkManager dispatcher修正(5.3節参照)を含む
+最終候補ISO(確定コミット`41cbb23`)についても、同じ物理UEFI実機の
+Secure Boot有効環境でブートメニュー表示からStandard版Liveデスクトップ
+到達までを再確認し、日本語表示や基本UIに大きな崩れがないことも確認した。
+
 ### 10.1.5 Calamaresバージョンと将来の再検討事項
 
 現行検証はCalamares 3.3.14(Debian 13 trixie収録版)を対象とする。自動
@@ -1177,15 +1195,28 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 ## 16.2 実機・互換性
 
 - ~~UEFI実USB起動~~ → 2026-09-20、物理UEFI実機でLiveデスクトップまでの起動を実機確認済み(17節参照)
-- Persistence作成済みUSBでUEFI起動
+- ~~Persistence作成済みUSBでUEFI起動~~ → 2026-09-23、物理UEFI実機でLive環境のGUI
+  (`mypocketos-persistence-setup`)からPersistence領域を作成し、再起動後に
+  `MyPocketOS Live (Persistence)`として起動、Conkyの起動モード表示が
+  `Persistence`になること、作成した`~/persistence-test.txt`が再起動後も
+  保持されること(`/home`永続化)を実機確認済み(17節参照)
 - UEFI起動メニュー3項目
-- ~~Secure Boot~~ → Live USB起動は2026-09-20に物理UEFI実機のSecure Boot有効環境で実機確認済み。2026-09-21には、Secure Boot有効環境でのCalamaresインストール完走・installed system起動も物理実機で確認済み(10.1.4節・17節参照)
-- 最低RAM
+- ~~Secure Boot~~ → Live USB起動は2026-09-20に物理UEFI実機のSecure Boot有効環境で実機確認済み。2026-09-21には、Secure Boot有効環境でのCalamaresインストール完走・installed system起動も物理実機で確認済み(10.1.4節・17節参照)。2026-09-23には、ConkyのNetworkManager dispatcher修正を含む最終候補ISOでの再確認(ブートメニュー表示・Liveデスクトップ到達・日本語表示や基本UIの大きな崩れなし)も同環境の物理実機で実施済み
+- ~~最低RAM~~ → 2026-09-23、最低RAMの実測は改めて行わないことを決定した。
+  Calamaresによる通常インストール要件としての「約2 GiB以上」(3節参照)は
+  維持しつつ、Live環境そのものの厳密な最小動作RAM実測値は未確定のまま、
+  初回リリースの完了条件(17節)としては扱わない方針とする
 - ~~必要に応じDebian Installer E2E~~ → 通常インストーラーはCalamaresを正式採用(10節参照)。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理Legacy BIOS実機でE2E確認済み(10.1.6節・17節参照)。Secure Boot有効状態でのインストール完走・installed system起動も、2026-09-21に物理UEFI実機で確認済み(10.1.4節参照)
 - Wi-Fi／NetworkManager設定のPersistence VM/実機動作確認 (Mode Bは2026-09-02、USB persistence IMG経由は2026-09-06に実機確認済み。Mode A経由、UEFI環境、Secure Boot環境、複数Wi-Fiプロファイルは未確認のまま、8.1節参照)
 - Mode A(既存partionを持つ外付けUSBの安全な初期化、2026-09-06拡張)の実機E2E(候補表示から作成・Persistence起動・再起動保持までの一連の流れは2026-09-06に実機確認済み。ただしhelper内部コマンドの個別トレース、署名・mount・swap・holders等の個々の拒否条件を実ブロックデバイスで確認する実機試験、UEFI/Secure Boot環境での確認は未実施のまま、8.3節参照)
 - タッチパッド既定動作(libinput InputClass、2026-09-06追加)の実機E2E(1本指タップ=左クリック・2本指タップ=右クリック・2本指スクロール・タップ&ドラッグ・物理クリック・USBマウスへの明らかな副作用なしは2026-09-06に実機確認済み。ただしトラックポイント搭載機、Bluetoothマウス、`xinput list-props`によるlibinputプロパティの直接確認は未実施のまま、9.3節参照)
 - ~~tint2バッテリー残量%表示(PR #32)の実ノートPCでの確認~~ → 2026-09-20、Legacy BIOS物理実機(Calamaresインストール後のInstalled system)でバッテリー残量%表示を実機確認済み(10.1.6節参照)
+- ~~Legacy BIOS低スペック実機でのWi-Fi接続・Conkyネットワーク表示~~ → 2026-09-23、
+  Legacy BIOS物理実機(Core 2 Duo T9550、RAM 4GB)でStandard版Liveデスクトップ
+  までの起動・USB Wi-Fiアダプタの認識・NetworkManager接続・ping疎通・
+  Firefoxでの実通信を確認した。同機で確認されたConkyのDown/Up表示`0B`固定の
+  不具合も、dispatcherへの固定2秒sleep追加により解消し、Wi-Fi接続後に
+  手動操作なしでDown/Upが自動更新されることを実機確認済み(5.3節参照)
 
 ## 16.3 配布仕様
 
@@ -1215,7 +1246,7 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | edition切替で他ISO非破壊 | ✅ |
 | Base／Standard package差 | ✅ |
 | 自動テストFAIL=0 | ✅ 現行報告上 |
-| GitHub CI PASS | ✅ 直近のPR(#50、Calamares関連の一連のPRを含む)まで継続してPASS。mainはbranch protectionにより2つのstatus check通過が必須(現在のHEAD `e5f5e16`まで維持) |
+| GitHub CI PASS | ✅ ISOのビルド基準コミットである`41cbb23`(PR #66、ConkyのNetworkManager dispatcher修正。最終のproduction code変更)で、mainのbranch protectionが必須とする2つのstatus check(`mypocketos-tests`・`static-checks`)がいずれもSUCCESS。`41cbb23`以降のPR(#67等)は文書のみの更新であり、ISOのビルド基準コミットとしては扱わない |
 | Normal Live／Persistence VM | ✅ |
 | Base／Standard VM E2E | ✅ |
 | 実USB Legacy BIOS | ✅ |
@@ -1224,9 +1255,10 @@ ISO/USB Volume ID（PR #30）・最初のブート画面のDebian表記（PR #30
 | Normal Liveとの分離 | ✅ |
 | Persistence再起動後Wi-Fi設定保持 (VM/実機) | ✅ Mode B実機(2026-09-02)・USB persistence IMG経由実機(2026-09-06)、いずれも起動方式(BIOS/UEFI)は不明(Mode A／UEFI／Secure Boot未確認) |
 | 実USB UEFI | ✅ 物理UEFI実機でLiveデスクトップまでの起動を確認済み(2026-09-20、Standard ISO) |
-| Persistence作成済みUSBのUEFI | ⬜ |
-| Secure Boot | ✅ Live USB起動は物理UEFI実機のSecure Boot有効環境で確認済み(2026-09-20、Standard ISO)。Calamaresインストール完走・installed system起動も同環境の物理実機で確認済み(2026-09-21、Standard ISO、10.1.4節参照)。確認した実機での結果であり、全機種での動作保証ではない |
-| 最低RAM | ⬜ |
+| Persistence作成済みUSBのUEFI | ✅ 2026-09-23、物理UEFI実機でGUIによるPersistence領域作成→再起動→`MyPocketOS Live (Persistence)`起動→`/home`保持(`persistence-test.txt`)を実機確認済み(16.2節参照) |
+| Legacy BIOS低スペック実機でのWi-Fi接続・Conkyネットワーク表示 | ✅ 2026-09-23、Legacy BIOS物理実機(Core 2 Duo T9550、RAM 4GB)でWi-Fi接続(ping・Firefox実通信)、およびConkyのDown/Up自動更新(dispatcher修正、5.3節参照)を実機確認済み |
+| Secure Boot | ✅ Live USB起動は物理UEFI実機のSecure Boot有効環境で確認済み(2026-09-20、Standard ISO)。Calamaresインストール完走・installed system起動も同環境の物理実機で確認済み(2026-09-21、Standard ISO、10.1.4節参照)。2026-09-23、ConkyのNetworkManager dispatcher修正を含む最終候補ISOでの再確認(ブートメニュー表示・Liveデスクトップ到達・基本UIの大きな崩れなし)も実施済み。確認した実機での結果であり、全機種での動作保証ではない |
+| 最低RAM | ✅ Calamares要件の「約2 GiB以上」(3節参照)を採用。厳密な最小動作RAM実測は行っておらず、初回リリースの完了条件としては扱わない方針(2026-09-23決定、16.2節参照) |
 | 最終ISO容量・USB要件(Persistence IMGは配布しないため対象外) | ✅ 確定コミット`41cbb23`からのビルドでISOサイズ確定(README.md参照)。USB容量は最小16GB／推奨32GB以上(RELEASE_NOTES.md参照) |
 | 通常インストール最終確認 | ✅ 正式機能として確定。UEFI VM・Legacy BIOS VM・物理UEFI実機・物理USB実機・**Legacy BIOS物理実機(2026-09-20)**で確認済み(10.1.6節参照)。Secure Boot有効環境でのLive USB起動は物理実機確認済み(2026-09-20)、Secure Boot有効状態でのCalamaresインストール完走・installed system起動も物理UEFI実機で確認済み(2026-09-21、10.1.4節参照) |
 | License / Known Issues / Release Notes | ✅ `LICENSE`・`RELEASE_NOTES.md`・`KNOWN_ISSUES.md`・`THIRD_PARTY_NOTICES.md`をmainへ追加済み |
